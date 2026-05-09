@@ -1,191 +1,155 @@
-# BanKV - 分布式键值数据库
+# BanDB "Flux" - 基于自研架构的高性能数仓前置存储
 
-基于 Raft 共识算法和 LSM-Tree 存储引擎构建的高可用分布式 KV 数据库。
+> **BanDB Flux**  is a high-performance Key-Value store built on a **fully self-developed TCP framework**. Designed as the ideal pre-storage layer for Data Warehouses, it features network-level programmable hooks for real-time data processing and leverages an LSM-Tree engine for massive log ingestion.
 
-## 🌟 项目亮点
+---
 
-- **高可用性**: 基于 Raft 共识算法实现数据一致性，支持多节点集群
-- **高性能存储**: 采用 LSM-Tree 架构，包含 MemTable (跳表) 和 SSTable，优化写入性能
-- **预写日志(WAL)**: 确保数据持久性和崩溃恢复能力
-- **自定义网络框架**: 内置 TCP 网络通信框架，支持消息路由和连接管理
-- **交互式客户端**: 提供命令行交互模式和批量操作模式
-- **纯 Go 实现**: 无第三方依赖，使用 Go 标准库构建
+## 🚀 1. 核心功能 (Features)
 
-## 🏗️ 系统架构
+### 🛠️ 全自研技术栈 (Self-Developed Stack)
+*   **自研 TCP 框架 (BanNet)**：摒弃沉重的 HTTP/gRPC，采用轻量级 TLV 二进制协议。支持连接级 Hook（Pre/Post Handle），可在网络层直接实现数据清洗、格式校验与动态限流。
+*   **LSM-Tree 存储引擎**：专为写密集型场景设计。通过跳表（SkipList）实现内存高速写入，配合后台异步 Compaction 机制，确保持久化过程不阻塞主线程。
+*   **双通道优先级调度**：独创抢占式双 Channel 设计，将在线实时响应与批量数据导出（如数仓同步）隔离，确保在高吞吐导出时业务延迟依然稳定。
 
-```
-BanKV/
-├── client/              # 客户端入口，支持交互模式和命令行模式
-│   ├── main.go          # 客户端主程序
-│   ├── client.go        # 客户端核心逻辑
-│   ├── interactive.go   # 交互式客户端实现
-│   ├── README.md        # 客户端使用说明
-│   └── run.bat          # Windows 启动脚本
-├── server/              # 服务端入口，负责启动 Raft、存储引擎和网络服务
-│   ├── server.go        # 服务端主程序
-│   ├── run.bat          # Windows 启动脚本
-│   └── run-clean.bat    # Windows 清理数据后启动脚本
-├── Raft/                # Raft 一致性协议实现
-│   ├── raft.go          # 选主、日志复制、状态机应用核心逻辑
-│   ├── raft_test.go     # Raft 算法测试
-│   ├── raft_wal.go      # Raft 日志持久化
-│   ├── rpc.go           # RPC 通信结构定义
-│   └── rpc_test.go      # RPC 通信测试
-├── storage/             # 存储引擎核心 (LSM-Tree)
-│   ├── engine.go        # 存储引擎封装，对外提供 Put/Get/Delete 接口
-│   ├── engine_test.go   # 存储引擎测试
-│   ├── istorage/        # 存储接口定义
-│   │   ├── Entry.go     # 存储条目定义
-│   │   ├── IMemTable.go # MemTable 接口
-│   │   ├── IWal.go      # WAL 接口
-│   │   └── SSTable.go   # SSTable 接口
-│   └── zstorage/        # 存储引擎具体实现
-│       ├── memtable.go      # 内存表 (跳表实现)
-│       ├── memtable_test.go # MemTable 测试
-│       ├── WAL.go           # 预写日志实现
-│       ├── wal_test.go      # WAL 测试
-│       └── SSTable.go       # SSTable 实现
-├── network/             # 网络通信框架
-│   ├── banIface/        # 网络接口定义
-│   │   ├── IConnManager.go # 连接管理器接口
-│   │   ├── IDataPack.go    # 数据打包接口
-│   │   ├── IMsgHandle.go   # 消息处理接口
-│   │   ├── iRequest.go     # 请求接口
-│   │   ├── iRouter.go      # 路由接口
-│   │   ├── iconnect.go     # 连接接口
-│   │   ├── imessage.go     # 消息接口
-│   │   └── isever.go       # 服务器接口
-│   └── banNet/        # 网络框架实现
-│       ├── server.go      # TCP 服务器实现
-│       ├── connection.go  # 连接管理实现
-│       ├── ConnManager.go # 连接管理器
-│       ├── msgHandle.go   # 消息处理器
-│       ├── DataPack.go    # 数据打包器
-│       ├── request.go     # 请求实现
-│       ├── router.go      # 路由实现
-│       └── message.go     # 消息实现
-├── service/             # 业务逻辑层
-│   ├── fsm.go           # 状态机应用逻辑 (Raft -> Storage)
-│   ├── fsm_test.go      # FSM 测试
-│   ├── router.go        # 请求路由处理 (PUT/GET/DELETE)
-│   ├── ha.go            # 高可用监控
-│   └── test_service_wal.log # 测试用 WAL 日志
-├── config/              # 配置管理
-│   ├── config.json      # JSON 配置文件
-│   └── global.go        # 全局配置加载和管理
-├── pkg/utils/           # 工具函数
-│   ├── byteBuilder.go   # 字节构建工具
-│   ├── datapack.go      # 数据打包工具
-│   └── message.go       # 消息处理工具
-├── log/                 # 日志和数据存储目录
-│   ├── SSTable          # SSTable 日志
-│   └── wal.log          # WAL 日志
-├── .idea/               # IDE 配置目录
-├── .ignore              # 忽略文件配置
-├── go.mod               # Go 模块定义
-├── README.md            # 项目说明文档
-└── QUICKSTART.md        # 快速启动指南
+### 🌊 数仓前置处理场景
+*   **电商订单流水**：应对大促期间每秒数万笔的订单创建高峰，利用 LSM 的顺序写特性实现高吞吐入库，并通过网络层 Hook 实时计算订单金额或拦截异常交易。
+*   **用户行为追踪**：存储海量的用户点击流（Clickstream），以 `UserID + Timestamp` 为 Key，支持快速回放用户路径并同步至 OLAP 引擎进行转化分析。
+*   **网络层 ETL**：通过 `PreHandle` 钩子在数据落盘前完成脱敏、格式标准化或无效数据过滤，减轻下游数仓（ClickHouse/Doris）的计算压力。
+*   **流式数据导出**：支持低优先级通道流式推送全量数据，实现与离线数仓的无缝对接。
+
+---
+
+## 💎 2. 核心优势 (Advantages)
+
+| 维度 | BanDB Flux | 传统方案 (Redis/MySQL) |
+| :--- | :--- | :--- |
+| **架构自主性** | ✅ **100% 自研网络与存储** | ❌ 依赖第三方库，黑盒难调优 |
+| **网络层可编程** | ✅ **Hook 机制实时干预** | ❌ 需额外部署 Nginx/网关 |
+| **写入吞吐量** | ⭐⭐⭐⭐⭐ (LSM 顺序写) | ⭐⭐ (B+树随机 I/O 瓶颈) |
+| **数仓集成度** | ✅ **原生支持流式导出** | ⚠️ 需开发复杂的 CDC 同步工具 |
+| **资源利用率** | ✅ **零外部依赖，极致轻量** | ❌ 运行时依赖多，内存开销大 |
+
+### 🎯 为什么选择 BanDB Flux？
+1.  **深度可控**：从 TCP 握手到磁盘 SSTable 生成，每一行代码都可追溯、可定制。适合对性能和安全性有极高要求的场景。
+2.  **削峰填谷**：作为数仓的“缓冲带”，利用 MemTable 吸收突发流量，保护后端 OLAP 系统不被瞬时高峰打垮。
+3.  **极简运维**：单二进制文件启动，无复杂的环境依赖，非常适合嵌入式部署或边缘计算节点。
+
+---
+
+### 🚀 3. 系统架构
+---
+
+## 🏗️ 架构演进：MVCC 与双通道调度
+
+BanDB Flux 计划引入 MVCC（多版本并发控制）以支持数仓的 T+0 一致性快照读取，并通过独创的双通道模型实现流量隔离。
+
+```mermaid
+graph TD
+    Client[客户端 / 数仓任务] -->|TLV 协议 + TxnID| BanNet[BanNet 网络层]
+    
+    subgraph "BanDB Flux 核心架构"
+        BanNet -->|PreHandle Hook| Router[路由与事务管理器]
+        
+        subgraph "MVCC 事务管理层"
+            Router -->|Start Txn| TxnMgr[事务管理器]
+            TxnMgr -->|分配 ReadTS/WriteTS| Snapshot[快照视图]
+            TxnMgr -->|Commit/Rollback| WAL[WAL 预写日志]
+        end
+
+        subgraph "LSM-Tree 存储引擎 (MVCC 适配)"
+            WAL -->|追加写| MemTable[MemTable (跳表)]
+            MemTable -->|Flush| L0[L0 SSTables (重叠)]
+            L0 -->|Compaction| L1[L1 SSTables (有序)]
+            L1 -->|Compaction| L2[L2 SSTables (归档)]
+            
+            note1[Key 格式: UserKey + Version(TS)] -.-> MemTable
+            note2[删除标记: Tombstone] -.-> L0
+        end
+    end
+
+    subgraph "双通道优先级调度模型"
+        Router -->|心跳包 / ACK| HighPrioChan[抢占式 Channel (无缓冲)]
+        Router -->|订单数据 / 导出流| LowPrioChan[Exporter Channel (有缓冲)]
+        
+        HighPrioChan -->|优先写入 TCP| Writer[TCP Writer 协程]
+        LowPrioChan -->|空闲时写入 TCP| Writer
+    end
+
+    subgraph "数仓集成"
+        LowPrioChan -->|批量推送| DataWarehouse[(ClickHouse / Doris)]
+    end
+
+    style BanNet fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    style HighPrioChan fill:#ffccbc,stroke:#d84315,stroke-width:2px
+    style LowPrioChan fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style DataWarehouse fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
 ```
 
-## 🚀 快速开始
+### 💡 设计亮点：
+*   **抢占式心跳**：无缓冲通道确保心跳包在任何情况下都能“插队”发送，维持连接稳定性。
+*   **Exporter 缓冲流**：有缓冲通道承载数仓同步的大流量，通过背压机制保护内存不被撑爆。
+*   **MVCC 快照读**：数仓任务基于 `ReadTS` 获取一致性视图，读写互不阻塞。
 
-### 前置要求
+---
 
-- Go 1.26.1 或更高版本
+## 🛠️ 4. 如何启动 (Getting Started)
 
-### 启动服务端
+### 环境要求
+*   Go 1.26+
+*   Windows / Linux / macOS
 
-```bash
-# 方法1: 使用启动脚本 (推荐)
-cd cmd/Server
-./run.bat
+### 快速启动
 
-# 方法2: 手动启动
-cd BanKV
-go run cmd/Server/Server.go
+1.  **克隆项目**
+    ```bash
+    git clone https://github.com/NeverENG/BanKv.git
+    cd BanDB
+    ```
+
+2.  **配置运行参数**
+    修改 `config/config.json`，根据你的硬件调整内存表大小：
+    ```json
+    {
+      "max_mem_table_size": 10000,
+      "worker_pool_size": 4,
+      "max_msg_chan_len": 1024
+    }
+    ```
+
+3.  **运行服务端**
+    ```bash
+    cd Server
+    go run .
+    ```
+
+4.  **交互式客户端测试**
+    ```bash
+    cd client
+    go run . localhost:8080
+    ```
+    *   **写入日志**：`put 20260508120000 {"level": "INFO", "msg": "service started"}`
+    *   **读取日志**：`get 20260508120000`
+
+---
+
+## 💡 典型场景分析：电商订单与实时数仓
+
+在复杂的业务架构中，BanDB Flux 充当了**高性能数据接入层**的角色：
+
+1.  **订单接收阶段**：客户端通过自研 TLV 协议发送订单信息，`PreHandle` 钩子自动校验订单格式并拦截恶意刷单请求。
+2.  **高速存储阶段**：合法订单被追加到跳表（MemTable），实现微秒级写入响应，完美扛住“双11”级别的流量洪峰。
+3.  **持久化与合并**：当内存达到阈值，后台协程自动将其 Flush 为有序的 SSTable 文件，并按时间维度进行 Compaction。
+4.  **数仓同步阶段**：数仓任务触发时，通过低优先级通道批量拉取历史订单数据，实现 T+0 的实时数据分析。
+
+```go
+// 示例：在网络层实现订单金额预校验
+router.SetPreHandle(func(req banIface.IRequest) {
+    order := parseOrder(req.GetMsgData())
+    if order.Amount <= 0 {
+        return // 直接丢弃金额为 0 的异常订单
+    }
+})
 ```
 
-### 启动客户端
-
-```bash
-# 方法1: 交互模式 (推荐)
-cd cmd/client
-./run.bat
-
-# 方法2: 命令行模式
-go run cmd/client put name Alice
-go run cmd/client get name
-go run cmd/client delete name
-```
-
-### 基本操作示例
-
-在交互模式中:
-
-```
-> put name Alice
-✅ OK
-
-> put age 25
-✅ OK
-
-> get name
-"Alice"
-
-> get age
-"25"
-
-> delete age
-✅ OK
-
-> get age
-❌ 错误: key not found or server error
-
-> quit
-再见！
-```
-
-## 📋 功能特性
-
-### 核心功能
-- ✅ PUT: 插入或更新键值对
-- ✅ GET: 根据键查询值
-- ✅ DELETE: 删除键值对
-- ✅ Raft 共识: 保证多节点数据一致性
-- ✅ WAL: 预写日志保证数据持久性
-- ✅ LSM-Tree: 高效的存储引擎架构
-
-### 高级特性
-- 🔧 跳表实现的 MemTable，支持 O(log n) 查找
-- 🔧 SSTable 持久化存储
-- 🔧 自动 Flush 机制 (MemTable -> SSTable)
-- 🔧 单节点和多节点集群模式
-- 🔧 心跳检测和领导者选举
-
-## 🛠️ 技术栈
-
-- **语言**: Go 1.26.1
-- **共识算法**: Raft
-- **存储引擎**: LSM-Tree (MemTable + SSTable + WAL)
-- **数据结构**: 跳表 (SkipList)
-- **网络**: TCP 自定义协议
-- **依赖**: 无第三方依赖，纯标准库实现
-
-## 📊 性能特点
-
-- **写入优化**: LSM-Tree 架构将随机写转换为顺序写
-- **读取加速**: MemTable 内存缓存 + 多层索引
-- **崩溃恢复**: WAL 日志确保数据不丢失
-- **一致性保证**: Raft 算法保证强一致性
-
-## 📖 详细文档
-
-- [快速启动指南](QUICKSTART.md) - 详细的启动和问题排查指南
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📄 许可证
-
-本项目采用 MIT 许可证。
+## 📚 5. 详细设计文档
+详细设计文档请查看 [BanDB Flux 详细设计文档](https://github.com/NeverENG/BanKv/blob/main/docs/BanDB%20Flux%20Design%20Document.md)。

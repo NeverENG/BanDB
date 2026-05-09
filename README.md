@@ -56,33 +56,33 @@ graph TD
             TxnMgr -->|Commit/Rollback| WAL[WAL 预写日志]
         end
 
-        subgraph "LSM-Tree 存储引擎 (MVCC 适配)"
-            WAL -->|追加写| MemTable[MemTable (跳表)]
-            MemTable -->|Flush| L0[L0 SSTables (重叠)]
-            L0 -->|Compaction| L1[L1 SSTables (有序)]
-            L1 -->|Compaction| L2[L2 SSTables (归档)]
+        subgraph "LSM-Tree 存储引擎"
+            WAL -->|追加写| MemT[MemTable 跳表]
+            MemT -->|Flush| L0[L0 SSTables 重叠]
+            L0 -->|Compaction| L1[L1 SSTables 有序]
+            L1 -->|Compaction| L2[L2 SSTables 归档]
             
-            note1[Key 格式: UserKey + Version(TS)] -.-> MemTable
+            note1[Key 格式: UserKey + Version] -.-> MemT
             note2[删除标记: Tombstone] -.-> L0
         end
     end
 
     subgraph "双通道优先级调度模型"
-        Router -->|心跳包 / ACK| HighPrioChan[抢占式 Channel (无缓冲)]
-        Router -->|订单数据 / 导出流| LowPrioChan[Exporter Channel (有缓冲)]
+        Router -->|心跳包 / ACK| HighChan[抢占式 Channel 无缓冲]
+        Router -->|订单数据 / 导出流| LowChan[Exporter Channel 有缓冲]
         
-        HighPrioChan -->|优先写入 TCP| Writer[TCP Writer 协程]
-        LowPrioChan -->|空闲时写入 TCP| Writer
+        HighChan -->|优先写入 TCP| Writer[TCP Writer 协程]
+        LowChan -->|空闲时写入 TCP| Writer
     end
 
     subgraph "数仓集成"
-        LowPrioChan -->|批量推送| DataWarehouse[(ClickHouse / Doris)]
+        LowChan -->|批量推送| DW[(ClickHouse / Doris)]
     end
 
     style BanNet fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style HighPrioChan fill:#ffccbc,stroke:#d84315,stroke-width:2px
-    style LowPrioChan fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
-    style DataWarehouse fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    style HighChan fill:#ffccbc,stroke:#d84315,stroke-width:2px
+    style LowChan fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px
+    style DW fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
 ```
 
 ### 💡 设计亮点：

@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/internal/storage/istorage"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
 func setupTestWAL(t *testing.T) *WAL {
@@ -31,11 +31,10 @@ func TestWAL_WriteAndRead(t *testing.T) {
 		t.Fatalf("WAL Write failed: %v", err)
 	}
 
-	var readEntries []istorage.LogEntry
-	wal.Read(func(entry istorage.LogEntry) error {
-		readEntries = append(readEntries, entry)
-		return nil
-	})
+	readEntries, err := wal.Read()
+	if err != nil {
+		t.Fatalf("WAL Read failed: %v", err)
+	}
 
 	if len(readEntries) != 1 {
 		t.Fatalf("Expected 1 entry, got %d", len(readEntries))
@@ -60,11 +59,10 @@ func TestWAL_WriteMultipleEntries(t *testing.T) {
 		}
 	}
 
-	var readEntries []istorage.LogEntry
-	wal.Read(func(entry istorage.LogEntry) error {
-		readEntries = append(readEntries, entry)
-		return nil
-	})
+	readEntries, err := wal.Read()
+	if err != nil {
+		t.Fatalf("WAL Read failed: %v", err)
+	}
 
 	if len(readEntries) != 3 {
 		t.Fatalf("Expected 3 entries, got %d", len(readEntries))
@@ -94,11 +92,10 @@ func TestWAL_Clear(t *testing.T) {
 	}
 
 	// 直接使用原来的 wal 实例验证清空结果（Clear 已经重新打开了文件）
-	var readEntries []istorage.LogEntry
-	wal.Read(func(entry istorage.LogEntry) error {
-		readEntries = append(readEntries, entry)
-		return nil
-	})
+	readEntries, err := wal.Read()
+	if err != nil {
+		t.Fatalf("WAL Read failed: %v", err)
+	}
 
 	if len(readEntries) != 0 {
 		t.Errorf("Expected 0 entries after clear, got %d", len(readEntries))

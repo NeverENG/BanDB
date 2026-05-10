@@ -1,7 +1,7 @@
 package banNet
 
 import (
-	"github.com/NeverENG/BanKV/network/banIface"
+	"github.com/NeverENG/bandb/network/banIface"
 )
 
 type BaseRouter struct{}

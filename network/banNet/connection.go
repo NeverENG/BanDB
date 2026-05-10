@@ -7,8 +7,8 @@ import (
 	"net"
 	"sync"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/network/banIface"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/network/banIface"
 )
 
 var _ banIface.IConnect = &Connection{}
@@ -19,11 +19,9 @@ type Connection struct {
 	Conn *net.TCPConn
 	// 链接的唯一 ID
 	ConnID uint32
-	// 该链接是否关闭
-	isClose   bool
+	// 该链接是否关�?	isClose   bool
 	MsgHandle banIface.IMsgHandle
-	// 该链接状态
-	ExitBuffChan chan bool
+	// 该链接状�?	ExitBuffChan chan bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -55,7 +53,7 @@ func NewConnection(conn *net.TCPConn, ConnID uint32, handle banIface.IMsgHandle,
 }
 func (c *Connection) StartReader() {
 	fmt.Println("[StartReader]")
-	defer fmt.Println("[Conn] 完美退出")
+	defer fmt.Println("[Conn] 完美退�?)
 	defer c.Stop()
 
 	for {
@@ -90,8 +88,7 @@ func (c *Connection) StartReader() {
 		}
 		msg.SetData(data)
 		req := NewRequest(msg, c)
-		// 根据有没有启动 WorkPool 选择不同的结果
-		if config.G.WorkerPoolSize > 0 {
+		// 根据有没有启�?WorkPool 选择不同的结�?		if config.G.WorkerPoolSize > 0 {
 			c.MsgHandle.SendMsgToTaskQueue(req)
 		} else {
 			go c.MsgHandle.DoMsgHandle(req)

@@ -1,8 +1,7 @@
 @echo off
-REM BanKV 客户端启动脚本
-
+REM bandb 客户端启动脚�?
 echo ========================================
-echo    BanKV Interactive Client
+echo    bandb Interactive Client
 echo ========================================
 echo.
 

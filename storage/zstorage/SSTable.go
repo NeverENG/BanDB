@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/storage/istorage"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
 type SSTable struct {
@@ -50,7 +50,7 @@ func (ss *SSTable) LoadSSTableMetaList() {
 	count := 0
 
 	for _, entry := range entries {
-		// 只处理 .sst 文件
+		// 只处理.sst 文件
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sst" {
 			continue
 		}
@@ -64,7 +64,7 @@ func (ss *SSTable) LoadSSTableMetaList() {
 			continue
 		}
 
-		// 只读取第一个 entry 的 key（MinKey）
+		// 只读取第一个entry的key（MinKey）
 		var minKey []byte
 		var keyLen uint32
 
@@ -85,7 +85,7 @@ func (ss *SSTable) LoadSSTableMetaList() {
 
 		minKey = keyBytes
 
-		// 关闭文件（不读取后续内容）
+		// 关闭文件（不读取后续内容
 		file.Close()
 
 		// 获取文件大小
@@ -95,7 +95,7 @@ func (ss *SSTable) LoadSSTableMetaList() {
 			continue
 		}
 
-		// 创建元数据对象（MaxKey 为 nil，延迟加载）
+		// 创建元数据对象（MaxKey设为nil，延迟加载）
 		meta := &istorage.SSTableMata{
 			Level:        0, // 默认 Level 0，后续可通过 Compaction 调整
 			Filepath:     fullPath,
@@ -126,13 +126,13 @@ func (ss *SSTable) LoadSSTableMetaList() {
 	fmt.Printf("[INFO] Loaded %d SSTable files from %s (fast mode, MaxKey lazy load)\n", count, dir)
 }
 
-// 实现持久化 ： 跳表数据持久化到磁盘中
+// 实现持久化跳表数据持久化到磁盘
 func (ss *SSTable) writeToSSTable(entries []istorage.LogEntry) error {
 	if len(entries) == 0 {
 		return errors.New("dont keep")
 	}
 
-	// 跳表本身是有序的，collectAllEntry 按顺序遍历，所以 entries 已经有序
+	// 跳表本身是有序的，collectAllEntry 按顺序遍历，所�?entries 已经有序
 
 	// 2. 生成文件名并创建目录
 	filename := fmt.Sprintf("sstable_%d.sst", time.Now().UnixNano())
@@ -194,9 +194,9 @@ func (ss *SSTable) GetAllMata() []*istorage.SSTableMata {
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
-	// ✅ 返回指针的副本，但指针指向的对象是同一个！
+	// 注意：返回指针的副本，但指针指向的对象是同一个！
 	result := make([]*istorage.SSTableMata, len(ss.mata))
-	copy(result, ss.mata) // ← 复制的是指针，不是对象本身
+	copy(result, ss.mata) // 注意：复制的是指针，不是对象本身
 	return result
 }
 
@@ -288,17 +288,17 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		return bytes.Compare(allEntries[i].Key, allEntries[j].Key) < 0
 	})
 
-	// 3. 去重：同一个 key 保留最后一个（最新版本）
+	// 3. 去重：同一个key保留最后一个（最新版本）
 	deduped := make([]*istorage.LogEntry, 0)
 	keyMap := make(map[string]int) // key -> index in deduped
 
 	for _, entry := range allEntries {
 		keyStr := string(entry.Key)
 		if idx, exists := keyMap[keyStr]; exists {
-			// key 已存在，覆盖旧值
+			// key 已存在，覆盖旧的
 			deduped[idx] = entry
 		} else {
-			// 新 key，添加到列表
+			// 新key，添加到列表
 			keyMap[keyStr] = len(deduped)
 			deduped = append(deduped, entry)
 		}
@@ -341,7 +341,7 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		MinKey:       deduped[0].Key,
 		MaxKey:       deduped[len(deduped)-1].Key,
 		Size:         info.Size(),
-		MaxKeyLoaded: true, // 新文件已有 MaxKey
+		MaxKeyLoaded: true, // 新文件已有MaxKey
 	}
 
 	ss.AddMata(newMeta)

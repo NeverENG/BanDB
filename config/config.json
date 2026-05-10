@@ -1,5 +1,5 @@
 {
-  "MaxMemTableSize": 1,
+  "MaxMemTableSize": 10000,
   "WALPath": "../../log/wal.log",
   "SSTablePath": "../../log",
   "Host": "127.0.0.1",

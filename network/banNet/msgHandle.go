@@ -3,8 +3,8 @@ package banNet
 import (
 	"fmt"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/network/banIface"
+	"github.com/NeverENG/bandb/config"
+	"github.com/NeverENG/bandb/network/banIface"
 )
 
 type MsgHandle struct {
@@ -34,7 +34,7 @@ func (m *MsgHandle) AddRouter(msgID uint32, r banIface.IRouter) {
 func (m *MsgHandle) DoMsgHandle(request banIface.IRequest) {
 	handler, ok := m.Arip[request.GetMsgID()]
 	if !ok {
-		fmt.Println("[ERROR] 该 Msgid 没有注册:", request.GetMsgID())
+		fmt.Println("[ERROR] �?Msgid 没有注册:", request.GetMsgID())
 		return
 	}
 	handler.PreHandle(request)

@@ -1,83 +1,45 @@
 package zstorage
 
 import (
-	"fmt"
+	"os"
 	"testing"
+	"github.com/NeverENG/BanDB/config"
 )
 
-func BenchmarkMemTable_Set(b *testing.B) {
+func TestMemTable_PutAndDelete(t *testing.T) {
+	// 配置临时WAL
+	oldWALPath := config.G.WALPath
+	testWAL := "test_memtable_wal.log"
+	config.G.WALPath = testWAL
+	os.Remove(testWAL) // 先删除旧的
+	defer func() {
+		os.Remove(testWAL)
+		config.G.WALPath = oldWALPath
+	}()
+	
 	memTable := NewMemTable()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
-		value := []byte(fmt.Sprintf("value_%d", i))
-		memTable.Put(key, value)
+	t.Log("MemTable created")
+	
+	err := memTable.Put([]byte("key1"), []byte("value1"))
+	if err != nil {
+		t.Fatalf("Put failed: %v", err)
 	}
-}
-
-func BenchmarkMemTable_Get(b *testing.B) {
-	memTable := NewMemTable()
-
-	const prefillSize = 10000
-	for i := 0; i < prefillSize; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
-		value := []byte(fmt.Sprintf("value_%d", i))
-		memTable.Put(key, value)
+	t.Logf("Put key1 success, size: %d", memTable.Size())
+	
+	val, err := memTable.Get([]byte("key1"))
+	if err != nil || string(val) != "value1" {
+		t.Fatalf("Get failed: val='%s', err=%v", string(val), err)
 	}
-
-	b.ResetTimer()
-	var value []byte
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i%prefillSize))
-		value, _ = memTable.Get(key)
+	t.Logf("Get key1 success: %s", string(val))
+	
+	err = memTable.Delete([]byte("key1"))
+	if err != nil {
+		t.Fatalf("Delete failed: %v", err)
 	}
-	_ = value
-}
-
-func BenchmarkMemTable_Delete(b *testing.B) {
-	memTable := NewMemTable()
-
-	const prefillSize = 10000
-	for i := 0; i < prefillSize; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
-		value := []byte(fmt.Sprintf("value_%d", i))
-		memTable.Put(key, value)
+	t.Log("Delete key1 success")
+	
+	val, err = memTable.Get([]byte("key1"))
+	if err == nil && val != nil {
+		t.Errorf("Expected key1 to be deleted, but got: %s", string(val))
 	}
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i%prefillSize))
-		memTable.Delete(key)
-	}
-}
-
-func BenchmarkMemTable_SetStringKey(b *testing.B) {
-	memTable := NewMemTable()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
-		value := []byte(fmt.Sprintf("value_%d", i))
-		memTable.Put(key, value)
-	}
-}
-
-func BenchmarkMemTable_GetStringKey(b *testing.B) {
-	memTable := NewMemTable()
-
-	const prefillSize = 10000
-	for i := 0; i < prefillSize; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i))
-		value := []byte(fmt.Sprintf("value_%d", i))
-		memTable.Put(key, value)
-	}
-
-	b.ResetTimer()
-	var value []byte
-	for i := 0; i < b.N; i++ {
-		key := []byte(fmt.Sprintf("key_%d", i%prefillSize))
-		value, _ = memTable.Get(key)
-	}
-	_ = value
 }

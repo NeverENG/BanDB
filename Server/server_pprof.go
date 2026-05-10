@@ -5,8 +5,8 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"github.com/NeverENG/BanKV/network/banNet"
-	"github.com/NeverENG/BanKV/service"
+	"github.com/NeverENG/bandb/network/banNet"
+	"github.com/NeverENG/bandb/service"
 )
 
 func main() {
@@ -22,10 +22,10 @@ func main() {
 	// 启动 FSM
 	go KVServer.Run()
 
-	// 初始化 HA
+	// 初始�?HA
 	ha := service.NewHA(KVServer)
 
-	// 初始化网络服务
+	// 初始化网络服�?
 	server := banNet.NewServer()
 
 	// 创建路由

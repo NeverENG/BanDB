@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/NeverENG/BanKV/Raft"
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/storage"
-	"github.com/NeverENG/BanKV/storage/zstorage"
+	"github.com/NeverENG/BanDB/Raft"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage"
+	"github.com/NeverENG/BanDB/storage/zstorage"
 )
 
 type Command struct {
@@ -23,7 +23,6 @@ type KVServer struct {
 }
 
 // NewFSM 创建 FSM，自动从全局配置初始化 Raft 和存储
-
 func NewKVServer() *KVServer {
 	// 从全局配置获取集群信息
 	peers := config.G.Peers
@@ -49,12 +48,12 @@ func (k *KVServer) Run() {
 	fmt.Println("[INFO] KVServer Run started, waiting for Raft entries...")
 	for entry := range k.raft.GetApplyCh() {
 		fmt.Printf("[INFO] Received Raft entry: Index=%d, Term=%d\n", entry.Index, entry.Term)
-		k.apply(entry)
+		k.Apply(entry)
 	}
 }
 
-// apply 应用日志到存储
-func (k *KVServer) apply(entry Raft.LogEntry) {
+// Apply 应用日志到存储
+func (k *KVServer) Apply(entry Raft.LogEntry) {
 	var cmd Command
 	if err := json.Unmarshal(entry.Command, &cmd); err != nil {
 		fmt.Printf("[ERROR] Failed to unmarshal command: %v\n", err)
@@ -121,7 +120,10 @@ func (k *KVServer) AppendEntry(cmd Command) (int, error) {
 	if err != nil {
 		return -1, err
 	}
-	index := k.raft.AppendEntry(cmdBytes)
+	index, err := k.raft.AppendEntry(cmdBytes)
+	if err != nil {
+		return -1, err
+	}
 	fmt.Printf("[INFO] AppendEntry returned index: %d\n", index)
 	return index, nil
 }

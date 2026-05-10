@@ -7,7 +7,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/NeverENG/BanKV/network/banIface"
+	"github.com/NeverENG/BanDB/network/banIface"
 )
 
 type GlobalConfig struct {
@@ -35,7 +35,6 @@ type GlobalConfig struct {
 	// Raft 集群配置
 	Peers []string // 集群中所有节点的地址
 	Me    int      // 当前节点在 Peers 中的索引（0-based）
-
 	// Raft 快照配置
 	RaftSnapshotThreshold   int // 触发快照的日志数量阈值
 	RaftSnapshotKeepEntries int // 快照后保留的日志条目数
@@ -79,25 +78,25 @@ func (g *GlobalConfig) Init() {
 func NewGlobalConfig() *GlobalConfig {
 	global := &GlobalConfig{
 
-		Name:             "Raft",
-		Port:             8080,
-		Host:             "localhost",
-		Version:          "1.0.0",
-		MaxConn:          1000,
-		MaxPackageSize:   1024,
-		WorkerPoolSize:   10,
-		MaxWorkerTaskLen: 10000,
-		MaxMsgChanLen:    100,
-		TcpServer:        nil,
-		MaxMemTableP:     0.5,
-		MaxMemTableLevel: 32,
-		MaxMemTableSize:  1024,
-		WALPath:          "../../../log/wal.log",
-		SSTablePath:      "../../../log",
-		Peers:            []string{"localhost:8080"}, // 默认单节点
-		Me:               0,                          // 默认节点ID
-		RaftSnapshotThreshold:   1000,                // 默认快照阈值
-		RaftSnapshotKeepEntries: 100,                 // 默认保留条目数
+		Name:                    "Raft",
+		Port:                    8080,
+		Host:                    "localhost",
+		Version:                 "1.0.0",
+		MaxConn:                 1000,
+		MaxPackageSize:          1024,
+		WorkerPoolSize:          10,
+		MaxWorkerTaskLen:        10000,
+		MaxMsgChanLen:           100,
+		TcpServer:               nil,
+		MaxMemTableP:            0.5,
+		MaxMemTableLevel:        32,
+		MaxMemTableSize:         1024,
+		WALPath:                 "../../../log/wal.log",
+		SSTablePath:             "../../../log",
+		Peers:                   []string{"localhost:8080"}, // 默认单节点
+		Me:                      0,                          // 默认节点ID
+		RaftSnapshotThreshold:   1000,                       // 默认快照阈值
+		RaftSnapshotKeepEntries: 100,                        // 默认保留条目数
 	}
 	global.Init()
 	global.ParseFlags()
@@ -107,7 +106,7 @@ func NewGlobalConfig() *GlobalConfig {
 // ParseFlags 解析命令行参数
 func (g *GlobalConfig) ParseFlags() {
 	// 创建一个新的 FlagSet，避免与全局的 CommandLine 冲突
-	fs := flag.NewFlagSet("bankv", flag.ContinueOnError)
+	fs := flag.NewFlagSet("bandb", flag.ContinueOnError)
 	fs.Usage = func() {}
 
 	// 定义命令行参数

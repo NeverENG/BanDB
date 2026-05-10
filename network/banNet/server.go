@@ -5,8 +5,8 @@ import (
 	"net"
 	"os"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/network/banIface"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/network/banIface"
 )
 
 type Server struct {
@@ -44,7 +44,7 @@ func (s *Server) GetConnMgr() banIface.IConnManager {
 }
 
 func (s *Server) Start() {
-	fmt.Printf("[START]BanKVNetWork:%s ip: %s port:%d \n", s.Name, s.IP, s.Port)
+	fmt.Printf("[START]bandbNetWork:%s ip: %s port:%d \n", s.Name, s.IP, s.Port)
 
 	go func() {
 
@@ -85,7 +85,7 @@ func (s *Server) Start() {
 				}
 
 				dealConn := NewConnection(conn, cid, s.MsgHandle, s)
-				fmt.Println("链接启动中")
+				fmt.Println("链接启动�?)
 				go dealConn.Start()
 				cid++
 			}
@@ -103,7 +103,7 @@ func (s *Server) Stop() {
 		fmt.Println("[INFO]Server listener at Port : " + fmt.Sprint(s.Port))
 		s.listener.Close()
 	}
-	fmt.Println("[INFO]安全退出")
+	fmt.Println("[INFO]安全退�?)
 }
 
 func (s *Server) Serve() {

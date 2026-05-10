@@ -3,8 +3,8 @@ package storage
 import (
 	"sync"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/storage/istorage"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
 type StorageCommand struct {

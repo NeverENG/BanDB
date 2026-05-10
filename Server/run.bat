@@ -1,8 +1,7 @@
 @echo off
-REM BanKV 服务端启动脚本
-
+REM bandb 服务端启动脚�?
 echo ========================================
-echo    BanKV Server
+echo    bandb Server
 echo ========================================
 echo.
 

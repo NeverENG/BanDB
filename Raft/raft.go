@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/NeverENG/BanKV/config"
+	"github.com/NeverENG/BanDB/config"
 )
 
 const (
@@ -446,13 +446,13 @@ func (r *Raft) checkSnapshotTrigger() {
 	}
 }
 
-func (r *Raft) AppendEntry(command []byte) int {
+func (r *Raft) AppendEntry(command []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.state != Leader {
 		fmt.Printf("[RAFT] AppendEntry failed: not leader, state=%v\n", r.state)
-		return -1
+		return -1, fmt.Errorf("not leader")
 	}
 
 	entry := LogEntry{
@@ -475,7 +475,7 @@ func (r *Raft) AppendEntry(command []byte) int {
 		r.replicateLog()
 	}
 
-	return entry.Index
+	return entry.Index, nil
 }
 
 func (r *Raft) replicateLog() {

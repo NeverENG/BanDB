@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/storage/istorage"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
 const HEADER_LENGTH = 12
@@ -26,7 +26,7 @@ func NewWAL() *WAL {
 	if err != nil {
 		slog.Error("[ERROR]:OPEN WAL LOG ERROR !", "path", config.G.WALPath, "error", err)
 		slog.Warn("[WARN]:WAL DISABLED, DATA WILL NOT BE PERSISTED")
-		// 返回一个空的 WAL，不报错
+		// 返回一个空的WAL，不报错
 		return &WAL{file: nil}
 	}
 	slog.Info("[INFO]:WAL OPENED SUCCESSFULLY", "path", config.G.WALPath)
@@ -34,7 +34,7 @@ func NewWAL() *WAL {
 }
 
 func (w *WAL) Write(entry istorage.LogEntry) error {
-	// 如果 file 为 nil，跳过写入（WAL 禁用模式）
+	// 如果 file is nil，跳过写入（WAL 禁用模式
 	if w.file == nil {
 		return nil
 	}
@@ -69,7 +69,7 @@ func (w *WAL) Write(entry istorage.LogEntry) error {
 }
 
 func (w *WAL) Read() ([]istorage.LogEntry, error) {
-	// 如果 file 为 nil，跳过读取
+	// 如果 file is nil，跳过读
 	if w.file == nil {
 		return nil, nil
 	}

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"math/rand"
 
-	"github.com/NeverENG/BanKV/config"
-	"github.com/NeverENG/BanKV/storage/istorage"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
 var _ istorage.IMemTable = &MemTable{}
@@ -192,8 +192,7 @@ func (m *MemTable) Delete(key []byte) error {
 		return errors.New("KEY NOT FOUND")
 	}
 
-	// 在每一层删除节点
-
+	// 在每一层删除节�?
 	for i := 0; i < m.level; i++ {
 		if update[i].Next[i] != p {
 			break
@@ -225,7 +224,7 @@ func (m *MemTable) recoverFromWAL() {
 	fmt.Printf("[INFO] Recovering %d entries from WAL...\n", len(entries))
 
 	for _, entry := range entries {
-		// 直接插入跳表，不写 WAL（避免重复写入）
+		// 直接插入跳表，不�?WAL（避免重复写入）
 		m.insertWithoutWAL(entry.Key, entry.Value)
 	}
 
@@ -347,11 +346,11 @@ func (m *MemTable) resetMemTable() error {
 
 func (m *MemTable) getFromSSTables(key []byte) ([]byte, bool) {
 	for _, meta := range m.sst.GetAllMata() {
-		// 首次访问时自动加载 MaxKey
+		// 首次访问时自动加载MaxKey
 
 		meta.EnsureMeta()
 
-		// 现在可以用 MinKey 和 MaxKey 过滤了
+		// 现在可以用 MinKey 和 MaxKey 过滤
 		if bytes.Compare(key, meta.MinKey) < 0 ||
 			bytes.Compare(key, meta.MaxKey) > 0 {
 			continue

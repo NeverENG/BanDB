@@ -101,12 +101,11 @@ func (c *Connection) StartReader() {
 
 func (c *Connection) StartWriter() {
 	fmt.Println("[StartWriter]")
-	defer fmt.Println("[INFO] Writer 已经关闭")
+	defer fmt.Println("[INFO] Writer 已关闭")
 	defer c.Stop()
 
 	for {
-		// 第一层 select：绝对优先级
-		// 优先处理 Exit 信号和高优心跳消息
+		// 检查最高优先级
 		select {
 		case <-c.ExitBuffChan:
 			return
@@ -118,32 +117,27 @@ func (c *Connection) StartWriter() {
 				fmt.Println("Write err:", err)
 				return
 			}
-			// 处理完高优消息后，回到 for 循环顶部，再次检查高优通道
-			continue
 		default:
-		}
-
-		// 第二层 select：正常调度
-		// 此时高优通道暂无数据，可以处理大容量 buffChan
-		select {
-		case <-c.ExitBuffChan:
-			return
-		case data, ok := <-c.msgChan:
-			// 在等待 msgBuffChan 的过程中再次监听 msgChan，随时可能有新的心跳包到达
-			if !ok {
+			// 高优通道全空时，在此静默等待
+			select {
+			case <-c.ExitBuffChan:
 				return
-			}
-			if _, err := c.Conn.Write(data); err != nil {
-				fmt.Println("Write err:", err)
-				return
-			}
-		case data, ok := <-c.msgBuffChan:
-			if !ok {
-				return
-			}
-			if _, err := c.Conn.Write(data); err != nil {
-				fmt.Println("Write err:", err)
-				return
+			case data, ok := <-c.msgChan:
+				if !ok {
+					return
+				}
+				if _, err := c.Conn.Write(data); err != nil {
+					fmt.Println("Write err:", err)
+					return
+				}
+			case data, ok := <-c.msgBuffChan:
+				if !ok {
+					return
+				}
+				if _, err := c.Conn.Write(data); err != nil {
+					fmt.Println("Write err:", err)
+					return
+				}
 			}
 		}
 	}

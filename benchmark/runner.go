@@ -1,0 +1,336 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/binary"
+	"fmt"
+	"math/big"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/NeverENG/BanDB/network/banNet"
+	"github.com/NeverENG/BanDB/pkg/utils"
+)
+
+type Config struct {
+	Addr      string
+	Workers   int
+	Duration  time.Duration
+	KeySize   int
+	ValueSize int
+	KeyCount  int
+	ReadRatio float64
+	Mode      string
+	Warmup    time.Duration
+}
+
+type Benchmark struct {
+	cfg   Config
+	stats *Stats
+}
+
+func NewBenchmark(cfg Config) *Benchmark {
+	return &Benchmark{
+		cfg:   cfg,
+		stats: NewStats(),
+	}
+}
+
+func (b *Benchmark) Run() error {
+	if b.cfg.Mode == "get" || b.cfg.Mode == "mixed" || b.cfg.Mode == "delete" {
+		fmt.Println("[Phase 1] Pre-populating data...")
+		if err := b.prePopulate(); err != nil {
+			return fmt.Errorf("pre-populate failed: %w", err)
+		}
+	}
+
+	if b.cfg.Warmup > 0 {
+		fmt.Printf("[Phase 2] Warming up (%s)...\n", b.cfg.Warmup)
+		b.runPhase(b.cfg.Warmup, nil)
+	}
+
+	fmt.Printf("[Phase 3] Running benchmark (%s)...\n", b.cfg.Duration)
+	b.stats.Start()
+	b.runPhase(b.cfg.Duration, b.stats)
+	b.stats.Stop()
+
+	PrintReport(b.cfg, b.stats)
+	return nil
+}
+
+func (b *Benchmark) prePopulate() error {
+	stats := NewStats()
+	stats.Start()
+
+	var wg sync.WaitGroup
+	keyCh := make(chan int, b.cfg.Workers*2)
+
+	go func() {
+		for i := 0; i < b.cfg.KeyCount; i++ {
+			keyCh <- i
+		}
+		close(keyCh)
+	}()
+
+	for w := 0; w < b.cfg.Workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c, err := dial(b.cfg.Addr)
+			if err != nil {
+				return
+			}
+			defer c.Close()
+
+			value := make([]byte, b.cfg.ValueSize)
+			for i := range keyCh {
+				key := makeKey(i, b.cfg.KeySize)
+				start := time.Now()
+				err := put(c, key, value)
+				stats.Record(time.Since(start), err)
+			}
+		}()
+	}
+
+	wg.Wait()
+	stats.Stop()
+
+	if stats.TotalErrs() > 0 {
+		return fmt.Errorf("%d errors during pre-population", stats.TotalErrs())
+	}
+
+	fmt.Printf("  Pre-populated %d keys in %s (%.0f qps)\n",
+		stats.TotalOps(), stats.Duration().Round(time.Millisecond), stats.QPS())
+	return nil
+}
+
+func (b *Benchmark) runPhase(dur time.Duration, stats *Stats) {
+	var wg sync.WaitGroup
+	stopCh := make(chan struct{})
+
+	if stats != nil {
+		go func() {
+			ticker := time.NewTicker(1 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					ops := stats.TotalOps()
+					elapsed := time.Since(stats.startTime)
+					qps := float64(ops) / elapsed.Seconds()
+					fmt.Printf("\r  Running... %d ops | %.0f qps | %s elapsed",
+						ops, qps, elapsed.Round(time.Second))
+				case <-stopCh:
+					return
+				}
+			}
+		}()
+	}
+
+	for w := 0; w < b.cfg.Workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.workerLoop(dur, stopCh, stats)
+		}()
+	}
+
+	time.Sleep(dur)
+	close(stopCh)
+	wg.Wait()
+
+	if stats != nil {
+		fmt.Print("\r") // clear progress line
+	}
+}
+
+func (b *Benchmark) workerLoop(dur time.Duration, stopCh chan struct{}, stats *Stats) {
+	c, err := dial(b.cfg.Addr)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+
+	value := make([]byte, b.cfg.ValueSize)
+	deadline := time.Now().Add(dur)
+
+	for time.Now().Before(deadline) {
+		select {
+		case <-stopCh:
+			return
+		default:
+		}
+
+		keyIdx, _ := rand.Int(rand.Reader, big.NewInt(int64(b.cfg.KeyCount)))
+		key := makeKey(int(keyIdx.Int64()), b.cfg.KeySize)
+
+		op := b.chooseOp()
+
+		var opErr error
+		start := time.Now()
+
+		switch op {
+		case "put":
+			opErr = put(c, key, value)
+		case "get":
+			_, opErr = get(c, key)
+		case "delete":
+			opErr = del(c, key)
+		}
+
+		lat := time.Since(start)
+		if stats != nil {
+			stats.Record(lat, opErr)
+		}
+	}
+}
+
+func (b *Benchmark) chooseOp() string {
+	switch b.cfg.Mode {
+	case "put":
+		return "put"
+	case "get":
+		return "get"
+	case "delete":
+		return "delete"
+	case "mixed":
+		r, _ := rand.Int(rand.Reader, big.NewInt(100))
+		if r.Int64() < int64(b.cfg.ReadRatio*100) {
+			return "get"
+		}
+		return "put"
+	default:
+		return "put"
+	}
+}
+
+// --- protocol helpers ---
+
+func dial(addr string) (*net.TCPConn, error) {
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", addr)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialTCP("tcp4", nil, tcpAddr)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
+
+func send(conn *net.TCPConn, msgID uint32, data []byte) error {
+	msg := utils.NewMessage2(msgID, data)
+	dp := banNet.NewDataPack()
+	packed, err := dp.Pack(msg)
+	if err != nil {
+		return err
+	}
+	_, err = conn.Write(packed)
+	return err
+}
+
+func recv(conn *net.TCPConn) ([]byte, error) {
+	dp := banNet.NewDataPack()
+	headLen := dp.GetHeadLen()
+
+	header := make([]byte, headLen)
+	if _, err := readFull(conn, header); err != nil {
+		return nil, err
+	}
+
+	tempMsg, err := dp.UnPack(header)
+	if err != nil {
+		return nil, err
+	}
+
+	dataLen := tempMsg.GetMsgLen()
+	if dataLen > 0 {
+		data := make([]byte, dataLen)
+		if _, err := readFull(conn, data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+	return []byte{}, nil
+}
+
+func readFull(conn *net.TCPConn, buf []byte) (int, error) {
+	total := 0
+	for total < len(buf) {
+		n, err := conn.Read(buf[total:])
+		if err != nil {
+			return total, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+func put(conn *net.TCPConn, key, value []byte) error {
+	keyLen := make([]byte, 4)
+	valLen := make([]byte, 4)
+	binary.LittleEndian.PutUint32(keyLen, uint32(len(key)))
+	binary.LittleEndian.PutUint32(valLen, uint32(len(value)))
+
+	data := utils.ByteBuilder(keyLen, valLen, key, value)
+	if err := send(conn, 1, data); err != nil {
+		return err
+	}
+	resp, err := recv(conn)
+	if err != nil {
+		return err
+	}
+	if len(resp) < 1 || resp[0] == 0x01 {
+		return fmt.Errorf("server error")
+	}
+	return nil
+}
+
+func get(conn *net.TCPConn, key []byte) ([]byte, error) {
+	keyLen := make([]byte, 4)
+	binary.LittleEndian.PutUint32(keyLen, uint32(len(key)))
+	data := utils.ByteBuilder(keyLen, key)
+
+	if err := send(conn, 2, data); err != nil {
+		return nil, err
+	}
+	resp, err := recv(conn)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp) < 1 || resp[0] == 0x01 {
+		return nil, fmt.Errorf("key not found")
+	}
+	if len(resp) < 5 {
+		return nil, fmt.Errorf("short response")
+	}
+	valueLen := binary.LittleEndian.Uint32(resp[1:5])
+	if len(resp) < 5+int(valueLen) {
+		return nil, fmt.Errorf("incomplete value")
+	}
+	return resp[5 : 5+valueLen], nil
+}
+
+func del(conn *net.TCPConn, key []byte) error {
+	keyLen := make([]byte, 4)
+	binary.LittleEndian.PutUint32(keyLen, uint32(len(key)))
+	data := utils.ByteBuilder(keyLen, key)
+
+	if err := send(conn, 3, data); err != nil {
+		return err
+	}
+	resp, err := recv(conn)
+	if err != nil {
+		return err
+	}
+	if len(resp) < 1 || resp[0] == 0x01 {
+		return fmt.Errorf("server error")
+	}
+	return nil
+}
+
+func makeKey(idx int, keySize int) []byte {
+	s := fmt.Sprintf("%0*x", keySize, idx)
+	return []byte(s)
+}

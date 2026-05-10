@@ -1,6 +1,6 @@
 package banNet
 
-import "github.com/NeverENG/bandb/network/banIface"
+import "github.com/NeverENG/BanDB/network/banIface"
 
 type Request struct {
 	msg  banIface.IMessage

@@ -4,8 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/NeverENG/bandb/config"
-	"github.com/NeverENG/bandb/storage/zstorage"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/storage/zstorage"
 )
 
 func setupTestEngine(t *testing.T) (*Engine, func()) {

@@ -3,21 +3,22 @@ package main
 import (
 	"fmt"
 
-	"github.com/NeverENG/bandb/network/banNet"
-	"github.com/NeverENG/bandb/service"
+	"github.com/NeverENG/BanDB/network/banNet"
+	"github.com/NeverENG/BanDB/service"
 )
 
 func main() {
-	// 初始�?FSM
+	// 初始化 FSM
 	KVServer := service.NewKVServer()
 
 	// 启动 FSM
 	go KVServer.Run()
 
-	// 初始�?HA
+	// 初始化 HA
 	ha := service.NewHA(KVServer)
 
-	// 初始化网络服�?	server := banNet.NewServer()
+	// 初始化网络服务
+	server := banNet.NewServer()
 
 	// 创建路由
 	router := service.NewRouter(KVServer)

@@ -85,7 +85,7 @@ func (s *Server) Start() {
 				}
 
 				dealConn := NewConnection(conn, cid, s.MsgHandle, s)
-				fmt.Println("链接启动�?)
+				fmt.Println("链接启动中")
 				go dealConn.Start()
 				cid++
 			}
@@ -103,7 +103,7 @@ func (s *Server) Stop() {
 		fmt.Println("[INFO]Server listener at Port : " + fmt.Sprint(s.Port))
 		s.listener.Close()
 	}
-	fmt.Println("[INFO]安全退�?)
+	fmt.Println("[INFO]安全退出")
 }
 
 func (s *Server) Serve() {

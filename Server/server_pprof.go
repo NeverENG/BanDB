@@ -5,13 +5,13 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"github.com/NeverENG/bandb/network/banNet"
-	"github.com/NeverENG/bandb/service"
+	"github.com/NeverENG/BanDB/network/banNet"
+	"github.com/NeverENG/BanDB/service"
 )
 
 func main() {
 	go func() {
-		fmt.Println("pprof is stating")
+		fmt.Println("pprof is starting")
 
 		if err := http.ListenAndServe(":6060", nil); err != nil {
 			fmt.Println("[ERROR] pprof start err:", err)
@@ -22,10 +22,10 @@ func main() {
 	// 启动 FSM
 	go KVServer.Run()
 
-	// 初始�?HA
+	// 初始化 HA
 	ha := service.NewHA(KVServer)
 
-	// 初始化网络服�?
+	// 初始化网络服务
 	server := banNet.NewServer()
 
 	// 创建路由

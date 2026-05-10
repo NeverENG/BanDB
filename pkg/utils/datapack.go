@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/NeverENG/bandb/config"
-	"github.com/NeverENG/bandb/network/banIface"
+	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/network/banIface"
 )
 
 type DataPack struct{}

@@ -98,27 +98,43 @@ func (c *Connection) StartReader() {
 
 func (c *Connection) StartWriter() {
 	fmt.Println("[StartWriter]")
-	defer fmt.Println("[INFO]Writer关闭")
+	defer fmt.Println("[INFO] Writer 已关闭")
 	defer c.Stop()
+
 	for {
+		// 检查最高优先级
 		select {
 		case <-c.ExitBuffChan:
 			return
 		case data, ok := <-c.msgChan:
 			if !ok {
-				break
-			}
-			if _, err := c.Conn.Write(data); err != nil {
-				fmt.Println("Write err:", err)
-				return
-			}
-		case data, ok := <-c.msgBuffChan:
-			if !ok {
 				return
 			}
 			if _, err := c.Conn.Write(data); err != nil {
 				fmt.Println("Write err:", err)
 				return
+			}
+		default:
+			// 高优通道全空时，在此静默等待
+			select {
+			case <-c.ExitBuffChan:
+				return
+			case data, ok := <-c.msgChan:
+				if !ok {
+					return
+				}
+				if _, err := c.Conn.Write(data); err != nil {
+					fmt.Println("Write err:", err)
+					return
+				}
+			case data, ok := <-c.msgBuffChan:
+				if !ok {
+					return
+				}
+				if _, err := c.Conn.Write(data); err != nil {
+					fmt.Println("Write err:", err)
+					return
+				}
 			}
 		}
 	}

@@ -16,6 +16,8 @@ import (
 	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
+var _ istorage.ISSTable = &SSTable{}
+
 type SSTable struct {
 	mata []*istorage.SSTableMata
 	mu   sync.RWMutex
@@ -77,7 +79,7 @@ func (ss *SSTable) LoadSSTableMetaList() {
 
 		// 读取 Key 内容
 		keyBytes := make([]byte, keyLen)
-		if _, err := file.Read(keyBytes); err != nil {
+		if _, err := io.ReadFull(file, keyBytes); err != nil {
 			fmt.Printf("[WARN] Failed to read key from %s: %v\n", entry.Name(), err)
 			file.Close()
 			continue
@@ -127,7 +129,7 @@ func (ss *SSTable) LoadSSTableMetaList() {
 }
 
 // 实现持久化跳表数据持久化到磁盘
-func (ss *SSTable) writeToSSTable(entries []istorage.LogEntry) error {
+func (ss *SSTable) WriteToSSTable(entries []istorage.LogEntry) error {
 	if len(entries) == 0 {
 		return errors.New("dont keep")
 	}
@@ -177,7 +179,10 @@ func (ss *SSTable) writeToSSTable(entries []istorage.LogEntry) error {
 		return err
 	}
 
-	info, _ := file.Stat()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat SSTable file failed: %v", err)
+	}
 	meta := &istorage.SSTableMata{
 		Level:        0,
 		Filepath:     fullPath,
@@ -220,7 +225,7 @@ func (ss *SSTable) ReadAllFromSSTable(filepath string) ([]*istorage.LogEntry, er
 
 		// 读取 Key 内容
 		keyBytes := make([]byte, keyLen)
-		if _, err := file.Read(keyBytes); err != nil {
+		if _, err := io.ReadFull(file, keyBytes); err != nil {
 			return nil, fmt.Errorf("failed to read key: %v", err)
 		}
 
@@ -232,7 +237,7 @@ func (ss *SSTable) ReadAllFromSSTable(filepath string) ([]*istorage.LogEntry, er
 
 		// 读取 Value 内容
 		valueBytes := make([]byte, valueLen)
-		if _, err := file.Read(valueBytes); err != nil {
+		if _, err := io.ReadFull(file, valueBytes); err != nil {
 			return nil, fmt.Errorf("failed to read value: %v", err)
 		}
 
@@ -320,10 +325,18 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		keyLen := uint32(len(entry.Key))
 		valueLen := uint32(len(entry.Value))
 
-		binary.Write(file, binary.BigEndian, keyLen)
-		file.Write(entry.Key)
-		binary.Write(file, binary.BigEndian, valueLen)
-		file.Write(entry.Value)
+		if err := binary.Write(file, binary.BigEndian, keyLen); err != nil {
+			return nil
+		}
+		if _, err := file.Write(entry.Key); err != nil {
+			return nil
+		}
+		if err := binary.Write(file, binary.BigEndian, valueLen); err != nil {
+			return nil
+		}
+		if _, err := file.Write(entry.Value); err != nil {
+			return nil
+		}
 	}
 
 	if err := file.Sync(); err != nil {
@@ -332,7 +345,11 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 	}
 
 	// 5. 获取文件信息
-	info, _ := file.Stat()
+	info, err := file.Stat()
+	if err != nil {
+		fmt.Printf("[ERROR] Failed to stat merged SSTable: %v\n", err)
+		return nil
+	}
 
 	// 6. 创建新文件的元数据
 	newMeta := &istorage.SSTableMata{

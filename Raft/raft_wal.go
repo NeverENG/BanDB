@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -167,7 +168,7 @@ func (w *RaftWAL) LoadLogs() ([]LogEntry, error) {
 			break
 		}
 		cmd := make([]byte, cmdLen)
-		if _, err := f.Read(cmd); err != nil {
+		if _, err := io.ReadFull(f, cmd); err != nil {
 			break
 		}
 
@@ -182,11 +183,15 @@ func (w *RaftWAL) LoadLogs() ([]LogEntry, error) {
 }
 
 func (w *RaftWAL) Clear() error {
-	w.Close()
-	if err := os.Remove(w.logPath); err != nil {
+	if err := w.Close(); err != nil {
 		return err
 	}
-	if err := os.Remove(w.metaPath); err != nil {
+	w.file = nil
+
+	if err := os.Remove(w.logPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(w.metaPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 

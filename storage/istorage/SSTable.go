@@ -1,15 +1,15 @@
 package istorage
 
 type ISSTable interface {
-	LoadFromDisk() []*SSTableMata
-	AddMata()
-	RemoveMata()
-	GetLevelFiles()
+	LoadSSTableMetaList()
+	AddMata(meta *SSTableMata)
+	RemoveMata(target *SSTableMata)
+	GetLevelFiles(level int) []*SSTableMata
 	GetAllMata() []*SSTableMata
 
-	WriteToSSTable(entry []LogEntry) (SSTableMata, error)
-	ReadFromSSTable(key []byte) []byte
-	ReadAllEntries()
-	MergeSSTables()
-	DeleteSSTable()
+	WriteToSSTable(entry []LogEntry) error
+	ReadFromSSTable(filepath string, key []byte) ([]byte, bool)
+	ReadAllFromSSTable(filepath string) ([]*LogEntry, error)
+	MergeSSTable(files []*SSTableMata, targetLevel int) *SSTableMata
+	DeleteSSTable(meta *SSTableMata)
 }

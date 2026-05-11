@@ -227,6 +227,12 @@ func (m *MemTable) Delete(key []byte) error {
 		return errors.New("NO DATA IN MEMTABLE")
 	}
 
+	// 先写 WAL tombstone（value 为 nil 表示删除标记），确保崩溃恢复时能重放删除
+	if err := m.wal.Write(istorage.LogEntry{Key: key, Value: nil}); err != nil {
+		fmt.Println("Error writing delete to WAL:", err)
+		return err
+	}
+
 	if !m.active.delete(key) {
 		fmt.Println("the key does not exist")
 		return errors.New("KEY NOT FOUND")
@@ -281,8 +287,11 @@ func (m *MemTable) recoverFromWAL() {
 	fmt.Printf("[INFO] Recovering %d entries from WAL...\n", len(entries))
 
 	for _, entry := range entries {
-		// 直接插入 active 表，不写入 WAL（避免重复写入）
-		m.active.insert(entry.Key, entry.Value)
+		if entry.Value == nil {
+			m.active.delete(entry.Key)
+		} else {
+			m.active.insert(entry.Key, entry.Value)
+		}
 	}
 
 	fmt.Printf("[INFO] WAL recovery completed, memtable size: %d\n", m.active.size)

@@ -1,9 +1,6 @@
 package storage
 
 import (
-	"sync"
-
-	"github.com/NeverENG/BanDB/config"
 	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
@@ -13,9 +10,10 @@ type StorageCommand struct {
 	Value []byte
 }
 
+// Engine 存储引擎，作为 MemTable 的薄封装
+// MemTable 内部已使用 RWMutex 自同步，Engine 不再持有自己的锁
 type Engine struct {
 	memTable istorage.IMemTable
-	mu       sync.RWMutex
 	applyCh  chan StorageCommand
 }
 
@@ -29,30 +27,17 @@ func NewEngine(memTable istorage.IMemTable) *Engine {
 }
 
 func (e *Engine) Put(key []byte, value []byte) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	err := e.memTable.Put(key, value)
-	if err != nil {
-		return err
-	}
-	if e.memTable.Size() > config.G.MaxMemTableSize {
-		e.memTable.StartFlush()
-	}
-	return nil
+	// MemTable.Put 内部已包含同步和刷盘触发逻辑
+	return e.memTable.Put(key, value)
 }
 
 func (e *Engine) Get(key []byte) ([]byte, error) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-
+	// MemTable.Get 内部已包含同步逻辑
 	return e.memTable.Get(key)
 }
 
 func (e *Engine) Delete(key []byte) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	// MemTable.Delete 内部已包含同步逻辑
 	return e.memTable.Delete(key)
 }
 

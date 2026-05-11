@@ -2,6 +2,7 @@ package istorage
 
 import (
 	"encoding/binary"
+	"io"
 	"os"
 	"sync"
 )
@@ -23,30 +24,38 @@ type SSTableMata struct {
 }
 
 func (meta *SSTableMata) EnsureMeta() {
-	meta.mu.Do(func() { // sync.Once 保证只执行一次
+	meta.mu.Do(func() {
 		if meta.MaxKeyLoaded {
 			return
 		}
 
-		file, _ := os.Open(meta.Filepath)
+		file, err := os.Open(meta.Filepath)
+		if err != nil {
+			return
+		}
 		defer file.Close()
 
 		var maxKey []byte
 
-		// 遍历整个文件，找到最后一个 key
 		for {
 			var keyLen uint32
 			if err := binary.Read(file, binary.BigEndian, &keyLen); err != nil {
-				break // EOF
+				break
 			}
 			keyBytes := make([]byte, keyLen)
-			file.Read(keyBytes)
+			if _, err := io.ReadFull(file, keyBytes); err != nil {
+				break
+			}
 
 			var valueLen uint32
-			binary.Read(file, binary.BigEndian, &valueLen)
-			file.Seek(int64(valueLen), 1) // 跳过 value
+			if err := binary.Read(file, binary.BigEndian, &valueLen); err != nil {
+				break
+			}
+			if _, err := file.Seek(int64(valueLen), io.SeekCurrent); err != nil {
+				break
+			}
 
-			maxKey = keyBytes // 不断更新，最后一条就是 MaxKey
+			maxKey = keyBytes
 		}
 
 		meta.MaxKey = maxKey

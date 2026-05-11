@@ -296,7 +296,7 @@ func (m *MemTable) Flush() {
 
 	allEntries := m.collectAllEntry()
 
-	err := m.sst.writeToSSTable(allEntries)
+	err := m.sst.WriteToSSTable(allEntries)
 	if err != nil {
 		fmt.Printf("Flush error: %v\n", err)
 		return
@@ -365,7 +365,7 @@ func (m *MemTable) getFromSSTables(key []byte) ([]byte, bool) {
 }
 
 func (m *MemTable) WriteSSTable() error {
-	err := m.sst.writeToSSTable(m.collectAllEntry())
+	err := m.sst.WriteToSSTable(m.collectAllEntry())
 	select {
 	case m.compactCh <- true:
 	default:

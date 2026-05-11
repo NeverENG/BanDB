@@ -1,0 +1,35 @@
+# CodeRabbit AI 代码审查配置
+# https://docs.coderabbit.ai/guides/configure-coderabbit
+
+language: "zh-CN"  # 审查评论使用中文
+
+reviews:
+  # 审查范围
+  profile: "assertive"          # chill | assertive | nitpick — assertive 会主动指出问题
+  request_changes_workflow: false  # false: 仅评论不阻塞合并, true: 发现严重问题标记 Request Changes
+  high_level_summary: true      # 在 PR 顶部生成变更摘要
+  high_level_summary_placeholder: "@coderabbitai summary"
+  auto_title_placeholder: "@coderabbitai"  # PR 标题/描述自动生成
+  poem: false                   # 关掉审查结尾的诗歌
+
+  # 审查策略
+  path_filters:
+    - "!**/*_test.go"    # 排除测试文件的审查
+    - "!vendor/**"
+    - "!.github/**"
+
+  auto_review:
+    enabled: true
+    drafts: false              # 不对 draft PR 自动审查
+    base_branches: ["main"]    # 只审查目标为 main 的 PR
+
+  # 内联评论设置
+  inline_comments:
+    enabled: true
+    severity_threshold: "info"  # info | warning | error — 低于此级别不评论
+
+chat:
+  auto_respond: true  # PR 中 @coderabbitai 自动回复
+
+knowledge:
+  learn_from_conversations: true  # 从 PR 讨论中学习项目上下文

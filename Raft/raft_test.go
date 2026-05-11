@@ -59,7 +59,7 @@ func TestAppendEntry(t *testing.T) {
 	peers := []string{"localhost:8000"}
 	r := NewRaft(peers, 0)
 
-	index := r.AppendEntry([]byte("test command"))
+	index, _ := r.AppendEntry([]byte("test command"))
 	if index != -1 {
 		t.Errorf("Expected -1 for non-leader, got %d", index)
 	}
@@ -88,7 +88,7 @@ func TestLeaderAppendsLog(t *testing.T) {
 		t.Skip("Not leader, skipping log append test")
 	}
 
-	index := r.AppendEntry([]byte("test command"))
+	index, _ := r.AppendEntry([]byte("test command"))
 	if index != 0 {
 		t.Errorf("Expected index 0, got %d", index)
 	}
@@ -374,7 +374,7 @@ func TestPersistAfterAppendEntry(t *testing.T) {
 	}
 
 	// 添加条目
-	index := r.AppendEntry([]byte("persistent command"))
+	index, _ := r.AppendEntry([]byte("persistent command"))
 	if index == -1 {
 		t.Fatal("AppendEntry failed")
 	}

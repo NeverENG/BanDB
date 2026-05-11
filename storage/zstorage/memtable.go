@@ -331,7 +331,7 @@ func (m *MemTable) Flush() {
 
 	// 步骤 3: 在锁外将 dirty 数据写入 SSTable（慢速 I/O，不阻塞读写）
 	allEntries := collectAllEntry(dirty)
-	err := m.sst.writeToSSTable(allEntries)
+	err := m.sst.WriteToSSTable(allEntries)
 	if err != nil {
 		fmt.Printf("Flush error: %v\n", err)
 		return
@@ -402,7 +402,7 @@ func (m *MemTable) WriteSSTable() error {
 	active := m.active
 	m.mu.RUnlock()
 
-	err := m.sst.writeToSSTable(collectAllEntry(active))
+	err := m.sst.WriteToSSTable(collectAllEntry(active))
 	select {
 	case m.compactCh <- true:
 	default:

@@ -23,7 +23,8 @@ func TestRequestVoteRPC(t *testing.T) {
 	go func() {
 		ln, err := net.Listen("tcp", "localhost:8000")
 		if err != nil {
-			t.Fatalf("Failed to listen: %v", err)
+			t.Errorf("Failed to listen: %v", err)
+			return
 		}
 		defer ln.Close()
 		server1.Accept(ln)
@@ -32,7 +33,8 @@ func TestRequestVoteRPC(t *testing.T) {
 	go func() {
 		ln, err := net.Listen("tcp", "localhost:8001")
 		if err != nil {
-			t.Fatalf("Failed to listen: %v", err)
+			t.Errorf("Failed to listen: %v", err)
+			return
 		}
 		defer ln.Close()
 		server2.Accept(ln)
@@ -77,7 +79,8 @@ func TestAppendEntriesRPC(t *testing.T) {
 	go func() {
 		ln, err := net.Listen("tcp", "localhost:8002")
 		if err != nil {
-			t.Fatalf("Failed to listen: %v", err)
+			t.Errorf("Failed to listen: %v", err)
+			return
 		}
 		defer ln.Close()
 		server1.Accept(ln)
@@ -86,7 +89,8 @@ func TestAppendEntriesRPC(t *testing.T) {
 	go func() {
 		ln, err := net.Listen("tcp", "localhost:8003")
 		if err != nil {
-			t.Fatalf("Failed to listen: %v", err)
+			t.Errorf("Failed to listen: %v", err)
+			return
 		}
 		defer ln.Close()
 		server2.Accept(ln)

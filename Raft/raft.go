@@ -195,11 +195,14 @@ func (r *Raft) startElection() {
 	r.votedFor = r.me
 	r.persistLocked() // 持久化 Term 和 votedFor
 
-	lastLogIndex := int(r.LastIncludedIndex)
-	lastLogTerm := int(r.LastIncludedTerm)
+	lastLogIndex := -1
+	lastLogTerm := 0
 	if len(r.log) > 0 {
 		lastLogIndex = r.log[len(r.log)-1].Index
 		lastLogTerm = r.log[len(r.log)-1].Term
+	} else if r.LastIncludedIndex > 0 {
+		lastLogIndex = int(r.LastIncludedIndex)
+		lastLogTerm = int(r.LastIncludedTerm)
 	}
 
 	args := &RequestVoteArgs{
@@ -247,6 +250,16 @@ func (r *Raft) startElection() {
 
 	r.mu.Unlock()
 
+	// 单节点模式：无需等待投票，直接成为 Leader
+	if peerCount == 0 {
+		r.mu.Lock()
+		if r.state == Candidate {
+			r.becomeLeader()
+		}
+		r.mu.Unlock()
+		return
+	}
+
 	// 等待投票结果或超时
 	timeout := time.After(500 * time.Millisecond)
 	for j := 0; j < peerCount; j++ {
@@ -282,9 +295,11 @@ func (r *Raft) becomeLeader() {
 	r.state = Leader
 
 	// 计算下一个日志的绝对索引（考虑快照偏移）
-	nextLogIndex := int(r.LastIncludedIndex) + 1
+	nextLogIndex := 0
 	if len(r.log) > 0 {
 		nextLogIndex = r.log[len(r.log)-1].Index + 1
+	} else if r.LastIncludedIndex > 0 {
+		nextLogIndex = int(r.LastIncludedIndex) + 1
 	}
 
 	for i := range r.peers {
@@ -500,7 +515,10 @@ func (r *Raft) getLastLogIndex() int {
 	if len(r.log) > 0 {
 		return r.log[len(r.log)-1].Index
 	}
-	return int(r.LastIncludedIndex)
+	if r.LastIncludedIndex > 0 {
+		return int(r.LastIncludedIndex)
+	}
+	return -1
 }
 
 func (r *Raft) AppendEntry(command []byte) (int, error) {
@@ -513,9 +531,11 @@ func (r *Raft) AppendEntry(command []byte) (int, error) {
 	}
 
 	// 计算绝对索引（考虑快照偏移）
-	lastLogIndex := int(r.LastIncludedIndex)
+	lastLogIndex := -1
 	if len(r.log) > 0 {
 		lastLogIndex = r.log[len(r.log)-1].Index
+	} else if r.LastIncludedIndex > 0 {
+		lastLogIndex = int(r.LastIncludedIndex)
 	}
 
 	entry := LogEntry{

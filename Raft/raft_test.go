@@ -204,8 +204,7 @@ func TestSnapshotCreation(t *testing.T) {
 	r.mu.Unlock()
 
 	// 创建快照
-	snapshotData := []byte("snapshot state")
-	err := r.TakeSnapshot(1, snapshotData)
+	err := r.TakeSnapshot(1)
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}
@@ -240,8 +239,7 @@ func TestSnapshotPersistence(t *testing.T) {
 	r.mu.Unlock()
 
 	// 创建快照（包含索引 0 和 1）
-	snapshotData := []byte("snapshot state at index 1")
-	err := r.TakeSnapshot(1, snapshotData)
+	err := r.TakeSnapshot(1)
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}

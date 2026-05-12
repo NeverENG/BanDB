@@ -50,6 +50,11 @@ func (e *Engine) GetApplyCh() chan StorageCommand {
 	return e.applyCh
 }
 
+// FlushToSSTable 快照重放到 SSTable（不经过 active 表，走临时表 → Flush → SSTable 路径）
+func (e *Engine) FlushToSSTable(entries []istorage.LogEntry) error {
+	return e.memTable.FlushToSSTable(entries)
+}
+
 func (e *Engine) applyWorker() {
 	for cmd := range e.applyCh {
 		switch cmd.Type {

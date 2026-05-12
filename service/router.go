@@ -77,8 +77,6 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 	key := data[8 : 8+keyLen]
 	value := data[8+keyLen : 8+keyLen+valueLen]
 
-	slog.Info("[INFO] handlePut", "key", string(key), "value", string(value))
-
 	// 创建命令并通过 Raft 追加日志
 	cmd := Command{
 		Type:  "Put",

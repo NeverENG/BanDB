@@ -8,6 +8,7 @@ import (
 	"github.com/NeverENG/BanDB/Raft"
 	"github.com/NeverENG/BanDB/config"
 	"github.com/NeverENG/BanDB/storage"
+	"github.com/NeverENG/BanDB/storage/istorage"
 	"github.com/NeverENG/BanDB/storage/zstorage"
 )
 
@@ -53,13 +54,19 @@ func (k *KVServer) Run() {
 
 // Apply 应用日志到存储
 func (k *KVServer) Apply(entry Raft.LogEntry) {
+	// 处理快照：异步重放到临时表 → Flush → SSTable，不阻塞 ApplyCh
+	if entry.IsSnapshot {
+		fmt.Printf("[FSM] Snapshot received, async replaying %d entries...\n",
+			len(Raft.DeserializeLogEntries(entry.Command)))
+		go k.replaySnapshot(entry)
+		return
+	}
+
 	var cmd Command
 	if err := json.Unmarshal(entry.Command, &cmd); err != nil {
 		fmt.Printf("[ERROR] Failed to unmarshal command: %v\n", err)
 		return
 	}
-
-
 
 	switch cmd.Type {
 	case "Put":
@@ -76,6 +83,34 @@ func (k *KVServer) Apply(entry Raft.LogEntry) {
 		} else {
 			fmt.Printf("[INFO] Delete success: %s\n", string(cmd.Key))
 		}
+	}
+}
+
+// replaySnapshot 异步重放快照中的日志条目到临时表并 Flush 到 SSTable
+func (k *KVServer) replaySnapshot(entry Raft.LogEntry) {
+	entries := Raft.DeserializeLogEntries(entry.Command)
+	if len(entries) == 0 {
+		return
+	}
+
+	kvEntries := make([]istorage.LogEntry, 0, len(entries))
+	for _, e := range entries {
+		var cmd Command
+		if err := json.Unmarshal(e.Command, &cmd); err != nil {
+			continue
+		}
+		switch cmd.Type {
+		case "Put":
+			kvEntries = append(kvEntries, istorage.LogEntry{Key: cmd.Key, Value: cmd.Value})
+		case "Delete":
+			kvEntries = append(kvEntries, istorage.LogEntry{Key: cmd.Key, Value: nil})
+		}
+	}
+
+	if err := k.storage.FlushToSSTable(kvEntries); err != nil {
+		fmt.Printf("[FSM ERROR] Snapshot replay failed: %v\n", err)
+	} else {
+		fmt.Printf("[FSM] Snapshot replay completed: %d entries flushed to SSTable\n", len(kvEntries))
 	}
 }
 

@@ -89,15 +89,24 @@ func (r *RaftRPC) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) er
 }
 
 func (r *RaftRPC) isLogUpToDate(candidateLastIndex, candidateLastTerm int) bool {
-	if len(r.raft.log) == 0 {
+	// 当前节点日志为空且无快照时，候选者日志始终是最新的
+	if len(r.raft.log) == 0 && r.raft.LastIncludedIndex == 0 {
 		return true
 	}
 
-	lastLog := r.raft.log[len(r.raft.log)-1]
-	if candidateLastTerm > lastLog.Term {
+	// 获取当前节点的最后日志索引和任期（考虑快照）
+	lastIndex := int(r.raft.LastIncludedIndex)
+	lastTerm := int(r.raft.LastIncludedTerm)
+	if len(r.raft.log) > 0 {
+		lastLog := r.raft.log[len(r.raft.log)-1]
+		lastIndex = lastLog.Index
+		lastTerm = lastLog.Term
+	}
+
+	if candidateLastTerm > lastTerm {
 		return true
 	}
-	if candidateLastTerm == lastLog.Term && candidateLastIndex >= len(r.raft.log)-1 {
+	if candidateLastTerm == lastTerm && candidateLastIndex >= lastIndex {
 		return true
 	}
 	return false
@@ -120,29 +129,51 @@ func (r *RaftRPC) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRep
 		r.raft.persistLocked()
 	}
 
-	if len(r.raft.log) > 0 && (args.PrevLogIndex >= len(r.raft.log) || r.raft.log[args.PrevLogIndex].Term != args.PrevLogTerm) {
-		reply.Success = false
-		reply.Term = r.raft.Term
-		return nil
+	// 检查 PrevLogIndex 是否匹配（考虑快照偏移）
+	if args.PrevLogIndex >= 0 {
+		if args.PrevLogIndex == int(r.raft.LastIncludedIndex) && r.raft.LastIncludedIndex > 0 {
+			// prevLogIndex 匹配快照，检查 term 是否一致
+			if args.PrevLogTerm != int(r.raft.LastIncludedTerm) {
+				reply.Success = false
+				reply.Term = r.raft.Term
+				return nil
+			}
+		} else if args.PrevLogIndex > int(r.raft.LastIncludedIndex) {
+			relativeIndex := args.PrevLogIndex - int(r.raft.LastIncludedIndex) - 1
+			if relativeIndex >= len(r.raft.log) || r.raft.log[relativeIndex].Term != args.PrevLogTerm {
+				reply.Success = false
+				reply.Term = r.raft.Term
+				return nil
+			}
+		} else {
+			// PrevLogIndex 小于 LastIncludedIndex，日志不一致
+			reply.Success = false
+			reply.Term = r.raft.Term
+			return nil
+		}
 	}
 
-	for i, entry := range args.Entries {
-		logIndex := args.PrevLogIndex + i + 1
-		if logIndex < len(r.raft.log) && r.raft.log[logIndex].Term != entry.Term {
-			r.raft.log = r.raft.log[:logIndex]
+	// 追加新日志条目
+	for _, entry := range args.Entries {
+		relativeIndex := entry.Index - int(r.raft.LastIncludedIndex) - 1
+		if relativeIndex < len(r.raft.log) && r.raft.log[relativeIndex].Term != entry.Term {
+			r.raft.log = r.raft.log[:relativeIndex]
 		}
-		if logIndex >= len(r.raft.log) {
+		if relativeIndex >= len(r.raft.log) {
 			r.raft.log = append(r.raft.log, entry)
 		}
 	}
 
-	// 持久化接收到的日志
 	if len(args.Entries) > 0 {
 		r.raft.persistLocked()
 	}
 
 	if args.LeaderCommit > r.raft.commitIndex {
-		r.raft.commitIndex = min(args.LeaderCommit, len(r.raft.log)-1)
+		lastLogIndex := int(r.raft.LastIncludedIndex)
+		if len(r.raft.log) > 0 {
+			lastLogIndex = r.raft.log[len(r.raft.log)-1].Index
+		}
+		r.raft.commitIndex = min(args.LeaderCommit, lastLogIndex)
 		r.applyCommittedLogs()
 	}
 
@@ -154,8 +185,11 @@ func (r *RaftRPC) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRep
 func (r *RaftRPC) applyCommittedLogs() {
 	for r.raft.lastApplied < r.raft.commitIndex {
 		r.raft.lastApplied++
-		if r.raft.ApplyCh != nil {
-			r.raft.ApplyCh <- r.raft.log[r.raft.lastApplied]
+		relativeIndex := r.raft.lastApplied - int(r.raft.LastIncludedIndex) - 1
+		if relativeIndex >= 0 && relativeIndex < len(r.raft.log) {
+			if r.raft.ApplyCh != nil {
+				r.raft.ApplyCh <- r.raft.log[relativeIndex]
+			}
 		}
 	}
 }
@@ -176,8 +210,8 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 		r.raft.votedFor = -1
 	}
 
-	if args.LastIncludedIndex <= int64(r.raft.commitIndex) {
-		// 快照比已提交的还旧，不需要应用
+	if args.LastIncludedIndex <= r.raft.LastIncludedIndex {
+		// 快照比已有的还旧，不需要应用
 		reply.Success = false
 		reply.Term = r.raft.Term
 		return nil
@@ -194,18 +228,15 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 	// 2. 删除旧快照
 	r.raft.wal.DeleteOldSnapshots(args.LastIncludedIndex)
 
-	// 3. 清理内存中的日志并重新编号
-	if len(r.raft.log) > 0 {
-		// 计算需要保留的日志起始位置（相对于 LastIncludedIndex）
-		newLogStart := int(args.LastIncludedIndex) - int(r.raft.LastIncludedIndex)
-		if newLogStart > 0 && newLogStart <= len(r.raft.log) {
-			r.raft.log = r.raft.log[newLogStart:]
-			for i := range r.raft.log {
-				r.raft.log[i].Index = int(args.LastIncludedIndex) + 1 + i
-			}
-		} else {
-			r.raft.log = []LogEntry{}
+	// 3. 清理内存中的日志并重新编号（移除快照包含的条目）
+	newLogStart := int(args.LastIncludedIndex) + 1 - int(r.raft.LastIncludedIndex)
+	if newLogStart >= 0 && newLogStart <= len(r.raft.log) {
+		r.raft.log = r.raft.log[newLogStart:]
+		for i := range r.raft.log {
+			r.raft.log[i].Index = int(args.LastIncludedIndex) + 1 + i
 		}
+	} else {
+		r.raft.log = []LogEntry{}
 	}
 
 	// 4. 截断 WAL 日志
@@ -219,6 +250,7 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 	// 5. 更新元数据
 	r.raft.commitIndex = int(args.LastIncludedIndex)
 	r.raft.lastApplied = int(args.LastIncludedIndex)
+	r.raft.lastSnapshotIndex = int(args.LastIncludedIndex)
 	r.raft.LastIncludedIndex = args.LastIncludedIndex
 	r.raft.LastIncludedTerm = args.LastIncludedTerm
 

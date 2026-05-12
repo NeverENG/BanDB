@@ -129,7 +129,6 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 
 	// 最后在 SSTable 中查找
 	if val, found := m.getFromSSTables(key); found {
-		fmt.Printf("[MEMTABLE] Get found in SSTable: key=%s\n", string(key))
 		return val, nil
 	}
 
@@ -402,6 +401,44 @@ func (m *MemTable) getFromSSTables(key []byte) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// FlushToSSTable 将 entries 写入临时跳表并立即 Flush 到 SSTable
+// 不经过 active 表，不影响正常读写，专用于快照重放等场景
+func (m *MemTable) FlushToSSTable(entries []istorage.LogEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// 创建临时跳表，按序插入（同 key 自动去重/更新）
+	tmp := newSkipList()
+	for _, entry := range entries {
+		if entry.Value == nil {
+			tmp.delete(entry.Key)
+		} else {
+			tmp.insert(entry.Key, entry.Value)
+		}
+	}
+
+	// 从临时跳表收集有序条目
+	sorted := collectAllEntry(tmp)
+	if len(sorted) == 0 {
+		return nil
+	}
+
+	// 写入 SSTable（SSTable 内部有锁保护元数据并发安全）
+	if err := m.sst.WriteToSSTable(sorted); err != nil {
+		return fmt.Errorf("FlushToSSTable write error: %w", err)
+	}
+
+	// 触发 Compaction 检查
+	select {
+	case m.compactCh <- true:
+	default:
+	}
+
+	fmt.Printf("[MEMTABLE] FlushToSSTable completed: %d entries\n", len(sorted))
+	return nil
 }
 
 func (m *MemTable) WriteSSTable() error {

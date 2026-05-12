@@ -436,9 +436,6 @@ func (r *Raft) checkSnapshotTrigger() {
 		// 计算快照索引：保留最新的 keepEntries 条日志
 		snapshotIndex := r.commitIndex - keepEntries
 		if snapshotIndex > r.lastSnapshotIndex {
-			fmt.Printf("[RAFT] Triggering snapshot: log length=%d, threshold=%d, snapshot index=%d\n",
-				logLength, threshold, snapshotIndex)
-
 			// 这里需要上层应用提供快照数据
 			// 实际使用时，应该通过回调或通道请求 FSM 生成快照
 			// TODO: 实现快照生成逻辑
@@ -463,12 +460,9 @@ func (r *Raft) AppendEntry(command []byte) (int, error) {
 	r.log = append(r.log, entry)
 	r.persistLocked() // 持久化日志条目
 
-	fmt.Printf("[RAFT] Appended entry: Index=%d, Term=%d\n", entry.Index, entry.Term)
-
 	// 单节点模式：立即提交
 	if len(r.peers) == 1 {
 		r.commitIndex = entry.Index
-		fmt.Printf("[RAFT] Single node mode, committed index: %d\n", r.commitIndex)
 		r.applyCommittedLogs()
 		r.commitCond.Broadcast()
 	} else {

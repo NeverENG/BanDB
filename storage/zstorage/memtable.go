@@ -116,7 +116,6 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 
 	// 先在 active 中查找（最新数据）
 	if val, found := active.search(key); found {
-		fmt.Printf("[MEMTABLE] Get found in active: key=%s, value=%s\n", string(key), string(val))
 		return val, nil
 	}
 
@@ -215,7 +214,6 @@ func (sl *SkipList) insert(key []byte, value []byte) {
 	}
 
 	sl.size++
-	fmt.Printf("[MEMTABLE] Put success: key=%s, value=%s, size=%d\n", string(key), string(value), sl.size)
 }
 
 // Delete 删除指定 key 的节点，始终操作 active 表

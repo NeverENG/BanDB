@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	MagicNumber = 0x52415654 // "RAFT" in ASCII
-	Version     = 1
-	StateFile   = "raft_state.dat"
-	LogFile     = "raft_log.dat"
-	SnapshotDir = "snapshots"
+	MagicNumber uint32 = 0x52415654 // "RAFT" in ASCII
+	Version     uint32 = 1
+	StateFile          = "raft_state.dat"
+	LogFile            = "raft_log.dat"
+	SnapshotDir        = "snapshots"
 )
 
 type RaftWAL struct {
@@ -80,10 +80,10 @@ func (w *RaftWAL) SaveState(term int64, votedFor int64) error {
 	if err := binary.Write(f, binary.BigEndian, Version); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.BigEndian, int64(state.Term)); err != nil {
+	if err := binary.Write(f, binary.BigEndian, state.Term); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.BigEndian, int64(state.VotedFor)); err != nil {
+	if err := binary.Write(f, binary.BigEndian, state.VotedFor); err != nil {
 		return err
 	}
 

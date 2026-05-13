@@ -195,6 +195,16 @@ func (r *Router) PostHandle(request banIface.IRequest) {
 	}
 }
 
+// OnConnStart 连接建立回调 — 向客户端发送会话开始通知
+func (r *Router) OnConnStart(conn banIface.IConnect) {
+	conn.SendBuffMsg(10, []byte("Connection established — session commenced."))
+}
+
+// OnConnStop 连接关闭回调 — 向客户端发送会话终止通知
+func (r *Router) OnConnStop(conn banIface.IConnect) {
+	conn.SendBuffMsg(11, []byte("Connection terminated — session concluded."))
+}
+
 // GetFSM 获取 FSM 实例
 func (r *Router) GetFSM() *KVServer {
 	return r.kv

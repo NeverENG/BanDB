@@ -4,7 +4,7 @@
   "SSTablePath": "../../log",
   "Host": "127.0.0.1",
   "Port": 8080,
-  "Name": "demo server",
+  "Name": "BanDB",
   "MaxConn": 100,
   "MaxPackageSize": 1024,
   "WorkPoolSize": 100,

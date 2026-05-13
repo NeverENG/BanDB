@@ -3,7 +3,8 @@
     "allow": [
       "Bash(go vet *)",
       "Bash(go test *)",
-      "Bash(go build *)"
+      "Bash(go build *)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

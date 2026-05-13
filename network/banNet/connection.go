@@ -54,8 +54,8 @@ func NewConnection(conn *net.TCPConn, ConnID uint32, handle banIface.IMsgHandle,
 	return c
 }
 func (c *Connection) StartReader() {
-	fmt.Println("[StartReader]")
-	defer fmt.Println("[Conn] 完美退出")
+	fmt.Println("[Reader] commenced")
+	defer fmt.Println("[Conn] exited gracefully")
 	defer c.Stop()
 
 	for {
@@ -100,8 +100,8 @@ func (c *Connection) StartReader() {
 }
 
 func (c *Connection) StartWriter() {
-	fmt.Println("[StartWriter]")
-	defer fmt.Println("[INFO] Writer 已关闭")
+	fmt.Println("[Writer] commenced")
+	defer fmt.Println("[Writer] closed")
 	defer c.Stop()
 
 	for {
@@ -144,7 +144,7 @@ func (c *Connection) StartWriter() {
 }
 
 func (c *Connection) Start() {
-	fmt.Println("[Connection] Start Connection", c.ConnID)
+	fmt.Println("[Connection] established — ID:", c.ConnID)
 	go c.StartReader()
 	go c.StartWriter()
 	c.TCPServer.CallConnStartFunc(c)
@@ -157,7 +157,7 @@ func (c *Connection) Start() {
 }
 
 func (c *Connection) Stop() {
-	fmt.Println("[Connection] Stop Connection", c.ConnID)
+	fmt.Println("[Connection] terminated — ID:", c.ConnID)
 	if c.isClose == true {
 		return
 	}

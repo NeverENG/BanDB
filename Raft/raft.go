@@ -495,10 +495,9 @@ func (r *Raft) checkSnapshotTrigger() {
 	if logLength > threshold {
 		snapshotIndex := r.commitIndex - keepEntries
 		if snapshotIndex > r.lastSnapshotIndex {
-			fmt.Printf("[RAFT] Auto-triggering snapshot at index %d (log length=%d, threshold=%d)\n",
-				snapshotIndex, logLength, threshold)
-			// 异步调用避免持锁死锁（checkSnapshotTrigger 在持锁上下文中被调用）
-			go r.TakeSnapshot(snapshotIndex)
+				slog.Info("auto-triggering snapshot", "index", snapshotIndex, "logLen", logLength, "threshold", threshold)
+				// 异步调用避免持锁死锁（checkSnapshotTrigger 在持锁上下文中被调用）
+				go r.TakeSnapshot(snapshotIndex)
 		}
 	}
 }
@@ -768,7 +767,7 @@ func (r *Raft) TakeSnapshot(index int) error {
 		}
 		select {
 		case r.ApplyCh <- snapshotEntry:
-			fmt.Printf("[RAFT] Snapshot replay sent to FSM: Index=%d, entries=%d\n", index, len(snapshotEntries))
+				slog.Info("snapshot replay sent to FSM", "index", index, "entries", len(snapshotEntries))
 		default:
 			slog.Warn("ApplyCh full, snapshot replay skipped")
 		}

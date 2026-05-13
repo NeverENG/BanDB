@@ -119,20 +119,18 @@ func (ss *SSTable) LoadSSTableMetaList() {
 
 	for _, meta := range metas {
 		go meta.EnsureMeta()
+		go ss.getBlockIndex(meta.Filepath) // 异步预热块索引
 	}
 
 	slog.Info("SSTable index loaded", "files", count, "dir", dir)
 }
 
-// 实现持久化跳表数据持久化到磁盘
+// WriteToSSTable 将有序 entries 写入 SSTable 文件（含块索引）
 func (ss *SSTable) WriteToSSTable(entries []istorage.LogEntry) error {
 	if len(entries) == 0 {
 		return errors.New("dont keep")
 	}
 
-	// 跳表本身是有序的，collectAllEntry 按顺序遍历，所�?entries 已经有序
-
-	// 2. 生成文件名并创建目录
 	filename := fmt.Sprintf("sstable_%d.sst", time.Now().UnixNano())
 	dir := config.G.SSTablePath
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -140,30 +138,64 @@ func (ss *SSTable) WriteToSSTable(entries []istorage.LogEntry) error {
 	}
 	fullPath := filepath.Join(dir, filename)
 
-	// 3. 创建文件
 	file, err := os.Create(fullPath)
 	if err != nil {
 		return fmt.Errorf("create SSTable file failed: %v", err)
 	}
 	defer file.Close()
 
-	// 4. 写入数据：先写 buffer，再一次落盘避免大量小 syscall
-	// 格式: [KeyLen(4B)][Key][ValueLen(4B)][Value]
-	var buf bytes.Buffer
-	for _, entry := range entries {
-		keyLen := uint32(len(entry.Key))
-		valueLen := uint32(len(entry.Value))
+	// 构建数据 buffer + 块索引
+	type blk struct {
+		lastKey     []byte
+		blockOffset int64
+	}
+	var blockIdx []blk
 
-		binary.Write(&buf, binary.BigEndian, keyLen)
+	var buf bytes.Buffer
+	for i, entry := range entries {
+		bi := i / SSTableBlockSize
+		if i%SSTableBlockSize == 0 {
+			blockIdx = append(blockIdx, blk{blockOffset: int64(buf.Len())})
+		}
+		blockIdx[bi].lastKey = entry.Key
+
+		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Key)))
 		buf.Write(entry.Key)
-		binary.Write(&buf, binary.BigEndian, valueLen)
+		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Value)))
 		buf.Write(entry.Value)
 	}
+
+	// 写数据
 	if _, err := file.Write(buf.Bytes()); err != nil {
 		return err
 	}
 
-	// 5. 确保数据刷入磁盘（Raft 日志已保证持久化，此处跳过 fsync 避免与 Raft 抢磁盘 IO）
+	// 写块索引: [LastKeyLen(4B)][LastKey][BlockOffset(8B)] × N
+	indexStart, _ := file.Seek(0, io.SeekCurrent)
+	for _, b := range blockIdx {
+		binary.Write(file, binary.BigEndian, uint32(len(b.lastKey)))
+		file.Write(b.lastKey)
+		binary.Write(file, binary.BigEndian, b.blockOffset)
+	}
+
+	// 写 Footer: BlockCount(4B) + IndexOffset(8B) + Magic(4B)
+	binary.Write(file, binary.BigEndian, uint32(len(blockIdx)))
+	binary.Write(file, binary.BigEndian, indexStart)
+	binary.Write(file, binary.BigEndian, indexFooterMagic)
+
+	// 缓存块索引
+	cache := make([]BlockIndexEntry, len(blockIdx))
+	for i, b := range blockIdx {
+		cache[i] = BlockIndexEntry{LastKey: b.lastKey, BlockOffset: b.blockOffset}
+	}
+	ss.idxMu.Lock()
+	ss.indexCache[fullPath] = cache
+	ss.idxMu.Unlock()
+
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync SSTable file failed: %v", err)
+	}
+
 	info, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("stat SSTable file failed: %v", err)
@@ -197,36 +229,44 @@ func (ss *SSTable) ReadAllFromSSTable(filepath string) ([]*istorage.LogEntry, er
 	}
 	defer file.Close()
 
+	// 尝试读 Footer，确定数据结束位置（新格式有块索引在末尾）
+	dataEnd := ss.readDataEndOffset(file)
+	if dataEnd > 0 {
+		file.Seek(0, io.SeekStart)
+	}
+
 	entries := make([]*istorage.LogEntry, 0)
 	for {
-		// 读取 Key 长度
+		if dataEnd > 0 {
+			pos, _ := file.Seek(0, io.SeekCurrent)
+			if pos >= dataEnd {
+				break
+			}
+		}
+
 		var keyLen uint32
 		if err := binary.Read(file, binary.BigEndian, &keyLen); err != nil {
 			if err == io.EOF {
-				break // 正常结束
+				break
 			}
 			return nil, fmt.Errorf("failed to read key length: %v", err)
 		}
 
-		// 读取 Key 内容
 		keyBytes := make([]byte, keyLen)
 		if _, err := io.ReadFull(file, keyBytes); err != nil {
 			return nil, fmt.Errorf("failed to read key: %v", err)
 		}
 
-		// 读取 Value 长度
 		var valueLen uint32
 		if err := binary.Read(file, binary.BigEndian, &valueLen); err != nil {
 			return nil, fmt.Errorf("failed to read value length: %v", err)
 		}
 
-		// 读取 Value 内容
 		valueBytes := make([]byte, valueLen)
 		if _, err := io.ReadFull(file, valueBytes); err != nil {
 			return nil, fmt.Errorf("failed to read value: %v", err)
 		}
 
-		// 添加到结果列表
 		entry := &istorage.LogEntry{
 			Key:   keyBytes,
 			Value: valueBytes,
@@ -237,9 +277,156 @@ func (ss *SSTable) ReadAllFromSSTable(filepath string) ([]*istorage.LogEntry, er
 	return entries, nil
 }
 
-func (ss *SSTable) ReadFromSSTable(filepath string, key []byte) ([]byte, bool) {
-	entries, _ := ss.ReadAllFromSSTable(filepath)
+// readDataEndOffset 读 Footer 返回数据结束偏移，老格式返回 -1
+func (ss *SSTable) readDataEndOffset(f *os.File) int64 {
+	info, err := f.Stat()
+	if err != nil || info.Size() < indexFooterSize {
+		return -1
+	}
 
+	if _, err := f.Seek(-indexFooterSize, io.SeekEnd); err != nil {
+		return -1
+	}
+	var blockCount uint32
+	var indexOffset int64
+	var magic uint32
+	binary.Read(f, binary.BigEndian, &blockCount)
+	binary.Read(f, binary.BigEndian, &indexOffset)
+	binary.Read(f, binary.BigEndian, &magic)
+
+	if magic == indexFooterMagic && blockCount > 0 && indexOffset > 0 {
+		return indexOffset
+	}
+	return -1
+}
+
+func (ss *SSTable) ReadFromSSTable(filepath string, key []byte) ([]byte, bool) {
+	if idx := ss.getBlockIndex(filepath); idx != nil {
+		return ss.searchBlock(filepath, key, idx)
+	}
+	// 老格式 fallback
+	return ss.readFromSSTableFull(filepath, key)
+}
+
+// getBlockIndex 从缓存取块索引，miss 时从文件加载
+func (ss *SSTable) getBlockIndex(filepath string) []BlockIndexEntry {
+	ss.idxMu.RLock()
+	idx, ok := ss.indexCache[filepath]
+	ss.idxMu.RUnlock()
+	if ok {
+		return idx
+	}
+	idx = ss.loadBlockIndexFromFile(filepath)
+	if idx == nil {
+		return nil
+	}
+	ss.idxMu.Lock()
+	ss.indexCache[filepath] = idx
+	ss.idxMu.Unlock()
+	return idx
+}
+
+// loadBlockIndexFromFile 从文件末尾读取块索引
+func (ss *SSTable) loadBlockIndexFromFile(filepath string) []BlockIndexEntry {
+	f, err := os.Open(filepath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(-indexFooterSize, io.SeekEnd); err != nil {
+		return nil
+	}
+	var blockCount uint32
+	var indexOffset int64
+	var magic uint32
+	binary.Read(f, binary.BigEndian, &blockCount)
+	binary.Read(f, binary.BigEndian, &indexOffset)
+	binary.Read(f, binary.BigEndian, &magic)
+
+	if magic != indexFooterMagic || blockCount == 0 || indexOffset <= 0 {
+		return nil
+	}
+
+	if _, err := f.Seek(indexOffset, io.SeekStart); err != nil {
+		return nil
+	}
+	idx := make([]BlockIndexEntry, blockCount)
+	for i := uint32(0); i < blockCount; i++ {
+		var keyLen uint32
+		if err := binary.Read(f, binary.BigEndian, &keyLen); err != nil {
+			return nil
+		}
+		key := make([]byte, keyLen)
+		if _, err := io.ReadFull(f, key); err != nil {
+			return nil
+		}
+		var offset int64
+		if err := binary.Read(f, binary.BigEndian, &offset); err != nil {
+			return nil
+		}
+		idx[i] = BlockIndexEntry{LastKey: key, BlockOffset: offset}
+	}
+	return idx
+}
+
+// searchBlock 二分索引定位块 → 只读目标块内扫描
+func (ss *SSTable) searchBlock(filepath string, key []byte, idx []BlockIndexEntry) ([]byte, bool) {
+	lo, hi := 0, len(idx)-1
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if bytes.Compare(key, idx[mid].LastKey) <= 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	if lo >= len(idx) {
+		return nil, false
+	}
+
+	f, err := os.Open(filepath)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+
+	if _, err := f.Seek(idx[lo].BlockOffset, io.SeekStart); err != nil {
+		return nil, false
+	}
+
+	for j := 0; j < SSTableBlockSize; j++ {
+		var kLen uint32
+		if err := binary.Read(f, binary.BigEndian, &kLen); err != nil {
+			break
+		}
+		k := make([]byte, kLen)
+		if _, err := io.ReadFull(f, k); err != nil {
+			break
+		}
+		var vLen uint32
+		if err := binary.Read(f, binary.BigEndian, &vLen); err != nil {
+			break
+		}
+		v := make([]byte, vLen)
+		if _, err := io.ReadFull(f, v); err != nil {
+			break
+		}
+
+		cmp := bytes.Compare(k, key)
+		if cmp == 0 {
+			return v, true
+		}
+		if cmp > 0 {
+			break
+		}
+	}
+	return nil, false
+}
+
+// readFromSSTableFull 老格式文件全量读取（兼容）
+func (ss *SSTable) readFromSSTableFull(filepath string, key []byte) ([]byte, bool) {
+	entries, _ := ss.ReadAllFromSSTable(filepath)
 	for _, entry := range entries {
 		if bytes.Equal(entry.Key, key) {
 			return entry.Value, true
@@ -292,7 +479,7 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		}
 	}
 
-	// 4. 写入新的 SSTable 文件
+	// 4. 写入新的 SSTable 文件（含块索引）
 	filename := fmt.Sprintf("sstable_merged_%d.sst", time.Now().UnixNano())
 	dir := config.G.SSTablePath
 	fullPath := filepath.Join(dir, filename)
@@ -304,39 +491,66 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 	}
 	defer file.Close()
 
-	for _, entry := range deduped {
-		keyLen := uint32(len(entry.Key))
-		valueLen := uint32(len(entry.Value))
+	type blk struct {
+		lastKey     []byte
+		blockOffset int64
+	}
+	var blockIdx []blk
+	var buf bytes.Buffer
 
-		if err := binary.Write(file, binary.BigEndian, keyLen); err != nil {
-			return nil
+	for i, entry := range deduped {
+		bi := i / SSTableBlockSize
+		if i%SSTableBlockSize == 0 {
+			blockIdx = append(blockIdx, blk{blockOffset: int64(buf.Len())})
 		}
-		if _, err := file.Write(entry.Key); err != nil {
-			return nil
-		}
-		if err := binary.Write(file, binary.BigEndian, valueLen); err != nil {
-			return nil
-		}
-		if _, err := file.Write(entry.Value); err != nil {
-			return nil
-		}
+		blockIdx[bi].lastKey = entry.Key
+
+		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Key)))
+		buf.Write(entry.Key)
+		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Value)))
+		buf.Write(entry.Value)
 	}
 
-	// 5. 获取文件信息（Raft 日志已保证持久化，跳过 fsync）
+	if _, err := file.Write(buf.Bytes()); err != nil {
+		return nil
+	}
+
+	indexStart, _ := file.Seek(0, io.SeekCurrent)
+	for _, b := range blockIdx {
+		binary.Write(file, binary.BigEndian, uint32(len(b.lastKey)))
+		file.Write(b.lastKey)
+		binary.Write(file, binary.BigEndian, b.blockOffset)
+	}
+	binary.Write(file, binary.BigEndian, uint32(len(blockIdx)))
+	binary.Write(file, binary.BigEndian, indexStart)
+	binary.Write(file, binary.BigEndian, indexFooterMagic)
+
+	cache := make([]BlockIndexEntry, len(blockIdx))
+	for i, b := range blockIdx {
+		cache[i] = BlockIndexEntry{LastKey: b.lastKey, BlockOffset: b.blockOffset}
+	}
+	ss.idxMu.Lock()
+	ss.indexCache[fullPath] = cache
+	ss.idxMu.Unlock()
+
+	if err := file.Sync(); err != nil {
+		slog.Error("failed to sync merged SSTable", "error", err)
+		return nil
+	}
+
 	info, err := file.Stat()
 	if err != nil {
 		slog.Error("failed to stat merged SSTable", "error", err)
 		return nil
 	}
 
-	// 6. 创建新文件的元数据
 	newMeta := &istorage.SSTableMata{
 		Level:        targetLevel,
 		Filepath:     fullPath,
 		MinKey:       deduped[0].Key,
 		MaxKey:       deduped[len(deduped)-1].Key,
 		Size:         info.Size(),
-		MaxKeyLoaded: true, // 新文件已有MaxKey
+		MaxKeyLoaded: true,
 	}
 
 	ss.AddMata(newMeta)
@@ -380,4 +594,7 @@ func (ss *SSTable) DeleteSSTable(meta *istorage.SSTableMata) {
 	if err := os.Remove(meta.Filepath); err != nil {
 		slog.Warn("failed to delete SSTable", "file", meta.Filepath, "error", err)
 	}
+	ss.idxMu.Lock()
+	delete(ss.indexCache, meta.Filepath)
+	ss.idxMu.Unlock()
 }

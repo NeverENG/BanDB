@@ -70,7 +70,7 @@ func (r *RaftRPC) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) er
 		r.raft.Term = args.Term
 		r.raft.state = Follower
 		r.raft.votedFor = -1
-		r.raft.persistLocked()
+		r.raft.persistStateLocked()
 	}
 
 	votedForMe := r.raft.votedFor == -1 || r.raft.votedFor == args.CandidateID
@@ -78,7 +78,7 @@ func (r *RaftRPC) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) er
 
 	if votedForMe && logUpToDate {
 		r.raft.votedFor = args.CandidateID
-		r.raft.persistLocked()
+		r.raft.persistStateLocked()
 		reply.VoteGranted = true
 	} else {
 		reply.VoteGranted = false
@@ -126,7 +126,7 @@ func (r *RaftRPC) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRep
 		r.raft.Term = args.Term
 		r.raft.state = Follower
 		r.raft.votedFor = -1
-		r.raft.persistLocked()
+		r.raft.persistStateLocked()
 	}
 
 	// 检查 PrevLogIndex 是否匹配（考虑快照偏移）
@@ -153,19 +153,34 @@ func (r *RaftRPC) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRep
 		}
 	}
 
-	// 追加新日志条目
+	// 追加新日志条目（增量持久化）
+	needRebuild := false
+	var newEntries []LogEntry
 	for _, entry := range args.Entries {
 		relativeIndex := entry.Index - int(r.raft.LastIncludedIndex) - 1
 		if relativeIndex < len(r.raft.log) && r.raft.log[relativeIndex].Term != entry.Term {
 			r.raft.log = r.raft.log[:relativeIndex]
+			needRebuild = true
 		}
 		if relativeIndex >= len(r.raft.log) {
 			r.raft.log = append(r.raft.log, entry)
+			newEntries = append(newEntries, entry)
 		}
 	}
 
 	if len(args.Entries) > 0 {
-		r.raft.persistLocked()
+		if needRebuild {
+			if err := r.raft.wal.RebuildLogFile(r.raft.log); err != nil {
+				fmt.Printf("[RAFT ERROR] Failed to rebuild log: %v\n", err)
+			}
+		} else {
+			for _, entry := range newEntries {
+				if err := r.raft.wal.AppendLog(entry); err != nil {
+					fmt.Printf("[RAFT ERROR] Failed to append log: %v\n", err)
+				}
+			}
+		}
+		r.raft.persistStateLocked()
 	}
 
 	if args.LeaderCommit > r.raft.commitIndex {
@@ -270,8 +285,8 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 		}
 	}
 
-	// 7. 持久化状态
-	r.raft.persistLocked()
+	// 7. 持久化状态（日志已由 TruncateLogs 处理）
+	r.raft.persistStateLocked()
 
 	reply.Term = r.raft.Term
 	reply.Success = true

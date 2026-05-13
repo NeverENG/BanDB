@@ -89,7 +89,7 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 		slog.Error("[ERROR] handlePut: AppendEntry failed", "error", err)
 		// 发送错误响应
 		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendMsg(5, response)
+		request.GetConnection().SendBuffMsg(5, response)
 		return
 	}
 
@@ -98,14 +98,13 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 		slog.Error("[ERROR] handlePut: WaitForCommit failed", "error", err)
 		// 发送错误响应
 		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendMsg(5, response)
+		request.GetConnection().SendBuffMsg(5, response)
 		return
 	}
 
 	// 发送成功响应
-	slog.Info("[INFO] handlePut: success")
 	response := []byte{0x00} // 成功标志
-	request.GetConnection().SendMsg(4, response)
+	request.GetConnection().SendBuffMsg(4, response)
 }
 
 // handleGet 处理 GET 操作
@@ -129,7 +128,7 @@ func (r *Router) handleGet(data []byte, request banIface.IRequest) {
 	if err != nil {
 		// 发送错误响应：1字节状态码
 		response := []byte{0x01}
-		request.GetConnection().SendMsg(5, response)
+		request.GetConnection().SendBuffMsg(5, response)
 		return
 	}
 
@@ -143,7 +142,7 @@ func (r *Router) handleGet(data []byte, request banIface.IRequest) {
 	// 写入 value 数据
 	copy(response[5:], value)
 
-	request.GetConnection().SendMsg(4, response)
+	request.GetConnection().SendBuffMsg(4, response)
 }
 
 // handleDelete 处理 DELETE 操作
@@ -172,7 +171,7 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 	if err != nil {
 		// 发送错误响应
 		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendMsg(5, response)
+		request.GetConnection().SendBuffMsg(5, response)
 		return
 	}
 
@@ -180,13 +179,13 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 	if err := r.kv.WaitForCommit(index); err != nil {
 		// 发送错误响应
 		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendMsg(5, response)
+		request.GetConnection().SendBuffMsg(5, response)
 		return
 	}
 
 	// 发送成功响应
 	response := []byte{0x00} // 成功标志
-	request.GetConnection().SendMsg(4, response)
+	request.GetConnection().SendBuffMsg(4, response)
 }
 
 // PostHandle 后置处理

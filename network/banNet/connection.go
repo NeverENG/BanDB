@@ -157,7 +157,7 @@ func (c *Connection) Start() {
 }
 
 func (c *Connection) Stop() {
-	fmt.Println("[Connection] Stop Connection", c.ConnID, "[ZINX]链接正在关闭")
+	fmt.Println("[Connection] Stop Connection", c.ConnID)
 	if c.isClose == true {
 		return
 	}

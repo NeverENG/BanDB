@@ -3,7 +3,7 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 
 	"github.com/NeverENG/BanDB/Raft"
 	"github.com/NeverENG/BanDB/config"
@@ -46,7 +46,7 @@ func NewKVServer() *KVServer {
 
 // Run 运行 FSM
 func (k *KVServer) Run() {
-	fmt.Println("[INFO] KVServer Run started, waiting for Raft entries...")
+	slog.Info("KVServer started, waiting for Raft entries")
 	for entry := range k.raft.GetApplyCh() {
 		k.Apply(entry)
 	}
@@ -54,34 +54,25 @@ func (k *KVServer) Run() {
 
 // Apply 应用日志到存储
 func (k *KVServer) Apply(entry Raft.LogEntry) {
-	// 处理快照：异步重放到临时表 → Flush → SSTable，不阻塞 ApplyCh
 	if entry.IsSnapshot {
-		fmt.Printf("[FSM] Snapshot received, async replaying %d entries...\n",
-			len(Raft.DeserializeLogEntries(entry.Command)))
 		go k.replaySnapshot(entry)
 		return
 	}
 
 	var cmd Command
 	if err := json.Unmarshal(entry.Command, &cmd); err != nil {
-		fmt.Printf("[ERROR] Failed to unmarshal command: %v\n", err)
+		slog.Error("failed to unmarshal command", "error", err)
 		return
 	}
 
 	switch cmd.Type {
 	case "Put":
-		err := k.storage.Put(cmd.Key, cmd.Value)
-		if err != nil {
-			fmt.Printf("[ERROR] Failed to put: %v\n", err)
-		} else {
-			fmt.Printf("[INFO] Put success: %s = %s\n", string(cmd.Key), string(cmd.Value))
+		if err := k.storage.Put(cmd.Key, cmd.Value); err != nil {
+			slog.Error("failed to put", "error", err)
 		}
 	case "Delete":
-		err := k.storage.Delete(cmd.Key)
-		if err != nil {
-			fmt.Printf("[ERROR] Failed to delete: %v\n", err)
-		} else {
-			fmt.Printf("[INFO] Delete success: %s\n", string(cmd.Key))
+		if err := k.storage.Delete(cmd.Key); err != nil {
+			slog.Error("failed to delete", "error", err)
 		}
 	}
 }
@@ -108,24 +99,15 @@ func (k *KVServer) replaySnapshot(entry Raft.LogEntry) {
 	}
 
 	if err := k.storage.FlushToSSTable(kvEntries); err != nil {
-		fmt.Printf("[FSM ERROR] Snapshot replay failed: %v\n", err)
-	} else {
-		fmt.Printf("[FSM] Snapshot replay completed: %d entries flushed to SSTable\n", len(kvEntries))
+		slog.Error("snapshot replay failed", "error", err)
 	}
 }
 
-// Get 从存储获取值
 func (k *KVServer) Get(key []byte) ([]byte, error) {
 	value, err := k.storage.Get(key)
-	if err != nil {
-		fmt.Printf("[ERROR] Get failed: %v\n", err)
-	} else {
-		fmt.Printf("[INFO] Get result: %s\n", string(value))
-	}
-	if value == nil {
+	if value == nil && err == nil {
 		return nil, errors.New("key not found")
 	}
-
 	return value, err
 }
 

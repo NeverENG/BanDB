@@ -1,7 +1,7 @@
 package Raft
 
 import (
-	"fmt"
+	"log/slog"
 	"net/rpc"
 )
 
@@ -171,12 +171,12 @@ func (r *RaftRPC) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRep
 	if len(args.Entries) > 0 {
 		if needRebuild {
 			if err := r.raft.wal.RebuildLogFile(r.raft.log); err != nil {
-				fmt.Printf("[RAFT ERROR] Failed to rebuild log: %v\n", err)
+				slog.Error("failed to rebuild log", "error", err)
 			}
 		} else {
 			for _, entry := range newEntries {
 				if err := r.raft.wal.AppendLog(entry); err != nil {
-					fmt.Printf("[RAFT ERROR] Failed to append log: %v\n", err)
+					slog.Error("failed to append log", "error", err)
 				}
 			}
 		}
@@ -234,7 +234,7 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 
 	// 1. 先保存快照到磁盘
 	if err := r.raft.wal.SaveSnapshot(args.Data, args.LastIncludedIndex, args.LastIncludedTerm); err != nil {
-		fmt.Printf("[RAFT ERROR] Failed to save snapshot: %v\n", err)
+		slog.Error("failed to save snapshot", "error", err)
 		reply.Success = false
 		reply.Term = r.raft.Term
 		return err
@@ -256,7 +256,7 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 
 	// 4. 截断 WAL 日志
 	if err := r.raft.wal.TruncateLogs(args.LastIncludedIndex); err != nil {
-		fmt.Printf("[RAFT ERROR] Failed to truncate logs: %v\n", err)
+		slog.Error("failed to truncate logs", "error", err)
 		reply.Success = false
 		reply.Term = r.raft.Term
 		return err
@@ -279,9 +279,9 @@ func (r *RaftRPC) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnaps
 		}
 		select {
 		case r.raft.ApplyCh <- snapshotEntry:
-			fmt.Printf("[RAFT] Snapshot delivered to FSM: Index=%d\n", args.LastIncludedIndex)
+			slog.Info("snapshot delivered to FSM", "index", args.LastIncludedIndex)
 		default:
-			fmt.Println("[WARN] ApplyCh is full, snapshot delivery skipped")
+			slog.Warn("ApplyCh full, snapshot delivery skipped")
 		}
 	}
 

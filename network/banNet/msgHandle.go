@@ -25,7 +25,7 @@ var _ banIface.IMsgHandle = &MsgHandle{}
 
 func (m *MsgHandle) AddRouter(msgID uint32, r banIface.IRouter) {
 	if _, ok := m.Arip[msgID]; ok {
-		fmt.Println("duplicate Arip:", m.Arip)
+		fmt.Println("[WARN] duplicate route registration:", m.Arip)
 		return
 	}
 	m.Arip[msgID] = r
@@ -34,7 +34,7 @@ func (m *MsgHandle) AddRouter(msgID uint32, r banIface.IRouter) {
 func (m *MsgHandle) DoMsgHandle(request banIface.IRequest) {
 	handler, ok := m.Arip[request.GetMsgID()]
 	if !ok {
-		fmt.Println("[ERROR] 该 Msgid 没有注册:", request.GetMsgID())
+		fmt.Println("[ERROR] unregistered MsgID:", request.GetMsgID())
 		return
 	}
 	handler.PreHandle(request)
@@ -56,7 +56,7 @@ func (m *MsgHandle) SendMsgToTaskQueue(request banIface.IRequest) {
 }
 
 func (m *MsgHandle) StartOneWorker(workerId int, taskQueue chan banIface.IRequest) {
-	fmt.Println("Worker id:", workerId, "is started")
+	fmt.Println("[Worker] commenced — ID:", workerId)
 	for {
 		select {
 		case request, ok := <-taskQueue:
@@ -70,12 +70,12 @@ func (m *MsgHandle) StartOneWorker(workerId int, taskQueue chan banIface.IReques
 }
 
 func (m *MsgHandle) Stop() {
-	fmt.Println("[INFO] MsgHandle send the quit signal")
+	fmt.Println("[MsgHandle] dispatching shutdown signal")
 
 	for i := 0; i < int(m.WorkerPoolSize); i++ {
 		if m.TaskQueue[i] != nil {
 			close(m.TaskQueue[i])
 		}
 	}
-	fmt.Println("[INFO] WorkPool closing")
+	fmt.Println("[WorkPool] shutting down")
 }

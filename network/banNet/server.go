@@ -44,7 +44,7 @@ func (s *Server) GetConnMgr() banIface.IConnManager {
 }
 
 func (s *Server) Start() {
-	fmt.Printf("[START]bandbNetWork:%s ip: %s port:%d \n", s.Name, s.IP, s.Port)
+	fmt.Printf("[Server] commenced — %s @ %s:%d\n", s.Name, s.IP, s.Port)
 
 	go func() {
 
@@ -69,7 +69,7 @@ func (s *Server) Start() {
 			select {
 			case <-s.ExitCh:
 				s.Stop()
-				fmt.Println("[INFO] Server Exit")
+				fmt.Println("[Server] shutting down")
 
 				return
 			default:
@@ -85,7 +85,7 @@ func (s *Server) Start() {
 				}
 
 				dealConn := NewConnection(conn, cid, s.MsgHandle, s)
-				fmt.Println("链接启动中")
+				fmt.Println("[Connection] initializing")
 				go dealConn.Start()
 				cid++
 			}
@@ -94,16 +94,16 @@ func (s *Server) Start() {
 }
 
 func (s *Server) Stop() {
-	fmt.Println("[INFO]Server listener at IP : " + s.IP)
+	fmt.Println("[Server] listener closed — IP:", s.IP)
 
 	s.ConnMgr.ClearConn()
 	s.MsgHandle.Stop()
 
 	if s.listener != nil {
-		fmt.Println("[INFO]Server listener at Port : " + fmt.Sprint(s.Port))
+		fmt.Println("[Server] listener closed — Port:", s.Port)
 		s.listener.Close()
 	}
-	fmt.Println("[INFO]安全退出")
+	fmt.Println("[Server] exited safely")
 }
 
 func (s *Server) Serve() {
@@ -119,7 +119,7 @@ func (s *Server) SetConnStopFunc(f func(conn banIface.IConnect)) {
 }
 func (s *Server) CallConnStartFunc(conn banIface.IConnect) {
 	if s.ConnStartFunc == nil {
-		fmt.Println("[ERROR] CallConnStartFunc is nil!")
+		fmt.Println("[WARN] CallConnStartFunc is nil — connection start callback not registered")
 		return
 	}
 	s.ConnStartFunc(conn)
@@ -127,7 +127,7 @@ func (s *Server) CallConnStartFunc(conn banIface.IConnect) {
 
 func (s *Server) CallConnStopFunc(conn banIface.IConnect) {
 	if s.ConnStopFunc == nil {
-		fmt.Println("[ERROR] CallConnStopFunc is nil!")
+		fmt.Println("[WARN] CallConnStopFunc is nil — connection stop callback not registered")
 		return
 	}
 	s.ConnStopFunc(conn)

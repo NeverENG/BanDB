@@ -28,6 +28,10 @@ func main() {
 	server.AddRouter(2, router) // GET 操作
 	server.AddRouter(3, router) // DELETE 操作
 
+	// 注册连接生命周期回调
+	server.SetConnStartFunc(router.OnConnStart)
+	server.SetConnStopFunc(router.OnConnStop)
+
 	// 启动服务
 	fmt.Println("Starting Server...")
 	fmt.Printf("HA initialized, initial health status: %v\n", ha.IsHealthy())

@@ -3,6 +3,7 @@ package Raft
 import (
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
@@ -95,7 +96,7 @@ func NewRaft(peers []string, me int) *Raft {
 
 	// 从磁盘加载持久化状态（currentTerm, votedFor, log, snapshot metadata）
 	if err := r.readPersist(); err != nil {
-		fmt.Printf("[RAFT WARN] Failed to load persisted state: %v\n", err)
+		slog.Warn("failed to load persisted state", "error", err)
 	}
 
 	// 如果有快照，通知 FSM
@@ -110,7 +111,7 @@ func NewRaft(peers []string, me int) *Raft {
 				IsSnapshot: true,
 			}:
 			default:
-				fmt.Println("[WARN] ApplyCh is full during initialization, snapshot skipped")
+				slog.Warn("ApplyCh full during init, snapshot skipped")
 			}
 		}
 	}
@@ -122,7 +123,14 @@ func NewRaft(peers []string, me int) *Raft {
 	return r
 }
 
-// persistLocked 持久化 Raft 状态（必须在持有锁的情况下调用）
+// persistStateLocked 仅持久化 Term 和 votedFor（增量持久化，O(1)）
+func (r *Raft) persistStateLocked() {
+	if err := r.wal.SaveState(int64(r.Term), int64(r.votedFor)); err != nil {
+		slog.Error("failed to persist state", "error", err)
+	}
+}
+
+// persistLocked 全量持久化 Raft 状态（仅用于日志冲突截断等特殊情况）
 func (r *Raft) persistLocked() {
 	data := PersistData{
 		CurrentTerm:       int64(r.Term),
@@ -133,7 +141,7 @@ func (r *Raft) persistLocked() {
 	}
 
 	if err := r.wal.SavePersist(data); err != nil {
-		fmt.Printf("[RAFT ERROR] Failed to persist state: %v\n", err)
+		slog.Error("failed to persist state", "error", err)
 	}
 }
 
@@ -188,12 +196,12 @@ func (r *Raft) startElection() {
 		return
 	}
 
-	fmt.Printf("[RAFT] Starting election, current state=%v, Term=%d\n", r.state, r.Term)
+	slog.Info("starting election", "state", r.state, "term", r.Term)
 
 	r.state = Candidate
 	r.Term++
 	r.votedFor = r.me
-	r.persistLocked() // 持久化 Term 和 votedFor
+	r.persistStateLocked()
 
 	lastLogIndex := -1
 	lastLogTerm := 0
@@ -291,7 +299,7 @@ func (r *Raft) startElection() {
 }
 
 func (r *Raft) becomeLeader() {
-	fmt.Printf("[RAFT] Becoming Leader, Term=%d\n", r.Term)
+	slog.Info("becoming leader", "term", r.Term)
 	r.state = Leader
 
 	// 计算下一个日志的绝对索引（考虑快照偏移）
@@ -307,7 +315,7 @@ func (r *Raft) becomeLeader() {
 		r.matchIndex[i] = int(r.LastIncludedIndex)
 	}
 
-	fmt.Printf("[RAFT] Started heartbeat loop\n")
+	slog.Debug("heartbeat loop started")
 	r.startHeartbeatLoop()
 }
 
@@ -526,7 +534,7 @@ func (r *Raft) AppendEntry(command []byte) (int, error) {
 	defer r.mu.Unlock()
 
 	if r.state != Leader {
-		fmt.Printf("[RAFT] AppendEntry failed: not leader, state=%v\n", r.state)
+		slog.Warn("AppendEntry rejected, not leader", "state", r.state)
 		return -1, fmt.Errorf("not leader")
 	}
 
@@ -544,7 +552,11 @@ func (r *Raft) AppendEntry(command []byte) (int, error) {
 		Command: command,
 	}
 	r.log = append(r.log, entry)
-	r.persistLocked()
+
+	// 增量持久化：仅追加一条日志
+	if err := r.wal.AppendLog(entry); err != nil {
+		slog.Error("failed to append log", "error", err)
+	}
 
 	// 单节点模式：立即提交
 	if len(r.peers) == 1 {
@@ -758,12 +770,12 @@ func (r *Raft) TakeSnapshot(index int) error {
 		case r.ApplyCh <- snapshotEntry:
 			fmt.Printf("[RAFT] Snapshot replay sent to FSM: Index=%d, entries=%d\n", index, len(snapshotEntries))
 		default:
-			fmt.Println("[WARN] ApplyCh is full, snapshot replay skipped")
+			slog.Warn("ApplyCh full, snapshot replay skipped")
 		}
 	}
 
-	// 7. 持久化状态
-	r.persistLocked()
+	// 7. 持久化状态（日志已由 TruncateLogs 处理）
+	r.persistStateLocked()
 
 	return nil
 }

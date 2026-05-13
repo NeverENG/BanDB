@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"sync"
 
@@ -119,20 +120,16 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 		return val, nil
 	}
 
-	// 再在 dirty 中查找（正在刷盘的旧表，可能还有尚未刷到磁盘的数据）
 	if dirty != nil && dirty.head != nil {
 		if val, found := dirty.search(key); found {
-			fmt.Printf("[MEMTABLE] Get found in dirty: key=%s, value=%s\n", string(key), string(val))
 			return val, nil
 		}
 	}
 
-	// 最后在 SSTable 中查找
 	if val, found := m.getFromSSTables(key); found {
 		return val, nil
 	}
 
-	fmt.Printf("[MEMTABLE] Get not found: key=%s\n", string(key))
 	return nil, errors.New("Key not found")
 }
 
@@ -158,12 +155,6 @@ func (m *MemTable) Put(key []byte, value []byte) error {
 
 	if m.active == nil || m.active.head == nil {
 		return errors.New("NO DATA IN MEMTABLE")
-	}
-
-	err := m.wal.Write(istorage.LogEntry{Key: key, Value: value})
-	if err != nil {
-		fmt.Println("Error writing to WAL:", err)
-		return err
 	}
 
 	m.active.insert(key, value)
@@ -224,15 +215,8 @@ func (m *MemTable) Delete(key []byte) error {
 		return errors.New("NO DATA IN MEMTABLE")
 	}
 
-	// 先写 WAL tombstone（value 为 nil 表示删除标记），确保崩溃恢复时能重放删除
-	if err := m.wal.Write(istorage.LogEntry{Key: key, Value: nil}); err != nil {
-		fmt.Println("Error writing delete to WAL:", err)
-		return err
-	}
-
 	if !m.active.delete(key) {
-		fmt.Println("the key does not exist")
-		return errors.New("KEY NOT FOUND")
+		return errors.New("key not found")
 	}
 	return nil
 }
@@ -272,16 +256,15 @@ func (sl *SkipList) delete(key []byte) bool {
 func (m *MemTable) recoverFromWAL() {
 	entries, err := m.wal.Read()
 	if err != nil {
-		fmt.Printf("[WARN] Failed to read WAL: %v\n", err)
+		slog.Warn("failed to read WAL", "error", err)
 		return
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("[INFO] No WAL entries to recover")
 		return
 	}
 
-	fmt.Printf("[INFO] Recovering %d entries from WAL...\n", len(entries))
+	slog.Info("recovering from WAL", "entries", len(entries))
 
 	for _, entry := range entries {
 		if entry.Value == nil {
@@ -291,7 +274,7 @@ func (m *MemTable) recoverFromWAL() {
 		}
 	}
 
-	fmt.Printf("[INFO] WAL recovery completed, memtable size: %d\n", m.active.size)
+	slog.Info("WAL recovery completed", "memtableSize", m.active.size)
 }
 
 func (m *MemTable) Sync() error {
@@ -328,42 +311,38 @@ func (m *MemTable) Flush() {
 		return
 	}
 
-	m.dirty = m.active // 旧表变为 dirty 快照
+	m.dirty = m.active
 	m.active = newSkipList()
-	dirty := m.dirty // 保存本地引用
+	dirty := m.dirty
 	m.mu.Unlock()
 
-	fmt.Printf("Flushing MemTable with %d entries...\n", dirty.size)
+	slog.Debug("flushing memtable", "entries", dirty.size)
 
-	// 步骤 3: 在锁外将 dirty 数据写入 SSTable（慢速 I/O，不阻塞读写）
 	allEntries := collectAllEntry(dirty)
 	err := m.sst.WriteToSSTable(allEntries)
 	if err != nil {
-		fmt.Printf("Flush error: %v\n", err)
+		slog.Error("flush error", "error", err)
 		return
 	}
 
-	// 步骤 4: 刷盘成功后清除 WAL，将 dirty 置 nil
 	err = m.Clear()
 	if err != nil {
-		fmt.Printf("WAL clear error: %v\n", err)
+		slog.Error("WAL clear error", "error", err)
 	}
 
 	m.mu.Lock()
 	m.dirty = nil
 	m.mu.Unlock()
 
-	fmt.Println("Flush completed successfully")
+	slog.Debug("flush completed")
 }
 
 func (m *MemTable) FlushWorker() {
 	for {
 		select {
 		case <-m.FlushChan:
-			fmt.Println("Flush")
 			m.Flush()
 		case <-m.stopCh:
-			fmt.Println("[INFO]STOP FLUSHWORKER")
 			return
 		}
 	}
@@ -437,7 +416,7 @@ func (m *MemTable) FlushToSSTable(entries []istorage.LogEntry) error {
 	default:
 	}
 
-	fmt.Printf("[MEMTABLE] FlushToSSTable completed: %d entries\n", len(sorted))
+	slog.Info("FlushToSSTable completed", "entries", len(sorted))
 	return nil
 }
 
@@ -460,7 +439,6 @@ func (m *MemTable) ListenCompactCh() {
 		case <-m.compactCh:
 			m.CompactSSTable(0)
 		case <-m.stopCh:
-			fmt.Println("[INFO]STOP COMPACTLISTENER")
 			return
 		}
 	}
@@ -476,11 +454,11 @@ func (m *MemTable) CompactSSTable(startLevel int) {
 			continue
 		}
 
-		fmt.Printf("[COMPACTION] Level %d has %d files, merging...\n", level, len(files))
+		slog.Info("compacting level", "level", level, "files", len(files))
 
 		newMeta := m.sst.MergeSSTable(files, level+1)
 		if newMeta == nil {
-			fmt.Printf("[ERROR] Failed to merge level %d\n", level)
+			slog.Error("failed to merge level", "level", level)
 			continue
 		}
 
@@ -489,6 +467,6 @@ func (m *MemTable) CompactSSTable(startLevel int) {
 			m.sst.RemoveMata(meta)
 		}
 
-		fmt.Printf("[COMPACTION] Level %d compaction completed\n", level)
+		slog.Info("level compaction completed", "level", level)
 	}
 }

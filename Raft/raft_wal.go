@@ -68,12 +68,16 @@ func (w *RaftWAL) Close() error {
 func (w *RaftWAL) SaveState(term int64, votedFor int64) error {
 	state := WALState{Term: term, VotedFor: votedFor}
 
-	f, err := os.Create(w.metaPath)
+	f, err := os.OpenFile(w.metaPath, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
+	// 从文件开头覆盖写入，避免 os.Create 的删除+重建开销
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	if err := binary.Write(f, binary.BigEndian, MagicNumber); err != nil {
 		return err
 	}
@@ -374,6 +378,24 @@ func (w *RaftWAL) TruncateLogs(lastIncludedIndex int64) error {
 		}
 	}
 
+	return nil
+}
+
+// RebuildLogFile 从内存日志重建整个日志文件（仅用于日志冲突截断）
+func (w *RaftWAL) RebuildLogFile(entries []LogEntry) error {
+	w.Close()
+
+	f, err := os.Create(w.logPath)
+	if err != nil {
+		return fmt.Errorf("failed to create log file: %w", err)
+	}
+	w.file = f
+
+	for _, entry := range entries {
+		if err := w.AppendLog(entry); err != nil {
+			return fmt.Errorf("failed to append log entry: %w", err)
+		}
+	}
 	return nil
 }
 

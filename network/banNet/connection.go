@@ -47,7 +47,7 @@ func NewConnection(conn *net.TCPConn, ConnID uint32, handle banIface.IMsgHandle,
 		isClose:      false,
 		ctx:          ctx,
 		cancel:       cancel,
-		msgChan:      make(chan []byte),
+		msgChan:      make(chan []byte, 10),                     // 高优通道加小缓冲，避免硬阻塞
 		msgBuffChan:  make(chan []byte, config.G.MaxMsgChanLen),
 	}
 	c.TCPServer.GetConnMgr().Add(c)
@@ -122,14 +122,6 @@ func (c *Connection) StartWriter() {
 			select {
 			case <-c.ExitBuffChan:
 				return
-			case data, ok := <-c.msgChan:
-				if !ok {
-					return
-				}
-				if _, err := c.Conn.Write(data); err != nil {
-					fmt.Println("Write err:", err)
-					return
-				}
 			case data, ok := <-c.msgBuffChan:
 				if !ok {
 					return

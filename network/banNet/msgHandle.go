@@ -50,8 +50,26 @@ func (m *MsgHandle) StartWorkerPool() {
 }
 
 func (m *MsgHandle) SendMsgToTaskQueue(request banIface.IRequest) {
-
 	workerID := request.GetConnection().GetConnID() % m.WorkerPoolSize
+
+	// 优先投递到专属 Worker
+	select {
+	case m.TaskQueue[workerID] <- request:
+		return
+	default:
+	}
+
+	// Work stealing: 专属队列满时，轮询其他 Worker
+	for i := uint32(1); i < m.WorkerPoolSize; i++ {
+		tryID := (workerID + i) % m.WorkerPoolSize
+		select {
+		case m.TaskQueue[tryID] <- request:
+			return
+		default:
+		}
+	}
+
+	// 全部满，退化为阻塞等待
 	m.TaskQueue[workerID] <- request
 }
 

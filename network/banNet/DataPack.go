@@ -27,7 +27,7 @@ func (dp *DataPack) Pack(msg banIface.IMessage) ([]byte, error) {
 		return nil, err
 	}
 	if err := binary.Write(dataBuff, binary.LittleEndian, msg.GetMsgID()); err != nil {
-		fmt.Println(msg.GetMsgID())
+		fmt.Println("[ERROR] Pack failed for MsgID:", msg.GetMsgID())
 		return nil, err
 	}
 	if err := binary.Write(dataBuff, binary.LittleEndian, msg.GetData()); err != nil {
@@ -48,7 +48,7 @@ func (dp *DataPack) UnPack(data []byte) (banIface.IMessage, error) {
 	}
 
 	if config.G.MaxPackageSize > 0 && msg.DataLen > config.G.MaxPackageSize {
-		fmt.Println(msg.GetMsgLen())
+		fmt.Println("[WARN] data exceeds max package size — length:", msg.GetMsgLen())
 		return nil, errors.New("data too large")
 	}
 	return msg, nil

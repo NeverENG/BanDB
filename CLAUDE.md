@@ -19,3 +19,12 @@
 - commit message 用一句话总结本次改动的内容与目的。
 - 改动完一部分就立刻提交，再继续下一部分。
 - 自动执行 commit，不要等待我的确认。
+
+## 4. 自动 PR + rebase merge
+每次 commit 并 push 后，**自动执行以下流程，无需询问**：
+- 若该分支尚未有 PR，立即 `gh pr create` 创建。
+- 若已有 PR，不再重复创建。
+- 创建 PR 后，使用 `gh pr merge --rebase --auto` 开启 GitHub 自动合并。
+- GitHub 会在 **CI 全部通过** 后自动 rebase merge 到 main。
+- **CI 不通过绝不 merge**，必须先修复问题重新 commit。
+- 如果 merge 冲突，停止并告知我需要手动解决。

@@ -5,7 +5,9 @@ import (
 	"flag"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/NeverENG/BanDB/network/banIface"
 )
@@ -55,27 +57,28 @@ func (g *GlobalConfig) Init() {
 	for _, path := range paths {
 		data, err = os.ReadFile(path)
 		if err == nil {
-			slog.Info("[INFO]:CONFIG FILE FOUND", "path", path)
+			slog.Info("config file found", "path", path)
 			break
 		}
 	}
 
 	if err != nil {
-		slog.Error("[ERROR]:READ CONFIG ERROR !", "error", err)
-		slog.Warn("[WARN]:USING DEFAULT CONFIG")
+		slog.Error("failed to read config", "error", err)
+		slog.Warn("falling back to default config")
 		return // 使用默认配置，不退出
 	}
 
 	err = json.Unmarshal(data, g)
 	if err != nil {
-		slog.Error("[ERROR]:CONFIG PARSE ERROR", "error", err)
+		slog.Error("failed to parse config", "error", err)
 		return
 	}
 
-	slog.Info("[INFO]:CONFIG INIT SUCCESS")
+	slog.Info("config initialized")
 }
 
 func NewGlobalConfig() *GlobalConfig {
+	logDir := defaultLogDir()
 	global := &GlobalConfig{
 
 		Name:                    "Raft",
@@ -91,8 +94,8 @@ func NewGlobalConfig() *GlobalConfig {
 		MaxMemTableP:            0.5,
 		MaxMemTableLevel:        32,
 		MaxMemTableSize:         1024,
-		WALPath:                 "../../../log/wal.log",
-		SSTablePath:             "../../../log",
+		WALPath:                 filepath.Join(logDir, "wal.log"),
+		SSTablePath:             logDir,
 		Peers:                   []string{"localhost:8080"}, // 默认单节点
 		Me:                      0,                          // 默认节点ID
 		RaftSnapshotThreshold:   1000,                       // 默认快照阈值
@@ -101,6 +104,26 @@ func NewGlobalConfig() *GlobalConfig {
 	global.Init()
 	global.ParseFlags()
 	return global
+}
+
+func defaultLogDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "log"
+	}
+
+	for dir := wd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(dir, "log")
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+	}
+
+	return "log"
 }
 
 // ParseFlags 解析命令行参数
@@ -113,7 +136,7 @@ func (g *GlobalConfig) ParseFlags() {
 	meFlag := fs.Int("me", -1, "Current node index in peers list")
 
 	// 解析命令行参数，忽略未定义的参数
-	err := fs.Parse(os.Args[1:])
+	err := fs.Parse(meFlagArgs(os.Args[1:]))
 	if err != nil {
 		// 忽略错误，继续执行
 	}
@@ -121,7 +144,7 @@ func (g *GlobalConfig) ParseFlags() {
 	// 处理命令行参数
 	if *meFlag >= 0 {
 		g.Me = *meFlag
-		slog.Info("[INFO]:ME SET BY FLAG", "me", g.Me)
+		slog.Info("me set via flag", "me", g.Me)
 	}
 
 	// 处理环境变量（优先级低于命令行参数）
@@ -129,18 +152,37 @@ func (g *GlobalConfig) ParseFlags() {
 		if meEnv := os.Getenv("RAFT_ME"); meEnv != "" {
 			if meInt, err := strconv.Atoi(meEnv); err == nil {
 				g.Me = meInt
-				slog.Info("[INFO]:ME SET BY ENV", "me", g.Me)
+				slog.Info("me set via env", "me", g.Me)
 			}
 		}
 	}
 
 	// 验证配置
 	if g.Me < 0 || g.Me >= len(g.Peers) {
-		slog.Error("[ERROR]:INVALID ME VALUE", "me", g.Me, "peers_len", len(g.Peers))
-		os.Exit(1)
+		slog.Error("invalid me value", "me", g.Me, "peers_len", len(g.Peers))
+		panic("invalid me value")
 	}
 
-	slog.Info("[INFO]:CONFIG FINALIZED", "peers", g.Peers, "me", g.Me)
+	slog.Info("config finalized", "peers", g.Peers, "me", g.Me)
+}
+
+func meFlagArgs(args []string) []string {
+	filtered := make([]string, 0, 2)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-me" {
+			filtered = append(filtered, arg)
+			if i+1 < len(args) {
+				filtered = append(filtered, args[i+1])
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-me=") {
+			filtered = append(filtered, arg)
+		}
+	}
+	return filtered
 }
 
 var G = NewGlobalConfig()

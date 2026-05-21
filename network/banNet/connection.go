@@ -19,8 +19,8 @@ type Connection struct {
 	Conn *net.TCPConn
 	// 链接的唯一 ID
 	ConnID uint32
-	// 该链接是否关闭
-	isClose   bool
+	// Stop 幂等化
+	stopOnce  sync.Once
 	MsgHandle banIface.IMsgHandle
 	// 该链接状态
 	ExitBuffChan chan bool
@@ -44,10 +44,9 @@ func NewConnection(conn *net.TCPConn, ConnID uint32, handle banIface.IMsgHandle,
 		ConnID:       ConnID,
 		MsgHandle:    handle,
 		ExitBuffChan: make(chan bool, 1),
-		isClose:      false,
 		ctx:          ctx,
 		cancel:       cancel,
-		msgChan:      make(chan []byte, 10),                     // 高优通道加小缓冲，避免硬阻塞
+		msgChan:      make(chan []byte, 10), // 高优通道加小缓冲，避免硬阻塞
 		msgBuffChan:  make(chan []byte, config.G.MaxMsgChanLen),
 	}
 	c.TCPServer.GetConnMgr().Add(c)
@@ -149,22 +148,19 @@ func (c *Connection) Start() {
 }
 
 func (c *Connection) Stop() {
-	fmt.Println("[Connection] terminated — ID:", c.ConnID)
-	if c.isClose == true {
-		return
-	}
-	c.isClose = true
-	c.TCPServer.CallConnStopFunc(c)
-	c.cancel()
-	c.Conn.Close()
-	c.ExitBuffChan <- true
-	c.TCPServer.GetConnMgr().Remove(c)
-	defer func() {
-		recover()
-	}()
-	close(c.ExitBuffChan)
-	close(c.msgChan)
-	close(c.msgBuffChan)
+	c.stopOnce.Do(func() {
+		fmt.Println("[Connection] terminated — ID:", c.ConnID)
+		c.TCPServer.CallConnStopFunc(c)
+		c.cancel()
+		c.Conn.Close()
+		// 非阻塞通知 Start/Writer 退出；多次入口被 stopOnce 折叠
+		select {
+		case c.ExitBuffChan <- true:
+		default:
+		}
+		c.TCPServer.GetConnMgr().Remove(c)
+		// 不 close msgChan / msgBuffChan：worker 可能仍在 SendBuffMsg，close 会触发 send on closed channel
+	})
 }
 func (c *Connection) GetConnID() uint32 {
 	return c.ConnID

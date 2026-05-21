@@ -121,6 +121,7 @@ func NewRaftWithDataDir(peers []string, me int, dataDir string) *Raft {
 	}
 
 	r.commitCond = sync.NewCond(&r.mu)
+	r.timer = time.NewTimer(r.electionTimeout)
 
 	go r.electionLoop()
 
@@ -178,18 +179,28 @@ func (r *Raft) Start() {
 
 func (r *Raft) electionLoop() {
 	for {
-		timeout := MinElectionTimeout + time.Duration(rand.Int63n(int64(MaxElectionTimeout-MinElectionTimeout)))
-		r.timer = time.NewTimer(timeout)
-
 		select {
 		case <-r.timer.C:
 			r.startElection()
+			r.resetElectionTimer()
 		case <-r.heartbeatCh:
-			r.timer.Reset(timeout)
+			r.resetElectionTimer()
 		case <-r.electionCh:
-			r.timer.Reset(timeout)
+			r.resetElectionTimer()
 		}
 	}
+}
+
+// resetElectionTimer 复用单一 timer: 先 Stop→drain 残留信号, 再用新随机超时 Reset
+func (r *Raft) resetElectionTimer() {
+	if !r.timer.Stop() {
+		select {
+		case <-r.timer.C:
+		default:
+		}
+	}
+	r.electionTimeout = MinElectionTimeout + time.Duration(rand.Int63n(int64(MaxElectionTimeout-MinElectionTimeout)))
+	r.timer.Reset(r.electionTimeout)
 }
 
 func (r *Raft) startElection() {

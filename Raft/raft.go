@@ -66,6 +66,10 @@ type Raft struct {
 }
 
 func NewRaft(peers []string, me int) *Raft {
+	return NewRaftWithDataDir(peers, me, "raft_data")
+}
+
+func NewRaftWithDataDir(peers []string, me int, dataDir string) *Raft {
 	addrMap := make(map[int]string)
 	for i, addr := range peers {
 		addrMap[i] = addr
@@ -90,7 +94,7 @@ func NewRaft(peers []string, me int) *Raft {
 		addrMap:     addrMap,
 	}
 
-	wal, _ := NewRaftWAL("raft_data")
+	wal, _ := NewRaftWAL(dataDir)
 
 	r.wal = wal
 

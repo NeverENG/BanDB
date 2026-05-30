@@ -127,7 +127,16 @@ func TestSSTableBackwardCompatV1(t *testing.T) {
 			t.Fatalf("v1 read %q: ok=%v val=%q", e.Key, ok, v)
 		}
 	}
-	if _, ok := ss.ReadFromSSTable(path, []byte("order:99999")); ok {
-		t.Error("v1 absent key reported present")
+	// v1 缺失 key 必须经块索引/全量 fallback 正确返回 (nil,false)：
+	for _, absent := range []string{
+		"order:99999", // 命名空间存在但 key 不存在
+		"log:00100",   // 落在已存在 key 范围内的空洞(仅插入 0..79)
+		"zzz:beyond",  // 超出最大 key
+		"aaa:before",  // 小于最小 key
+		"nosuchns:1",  // 命名空间不存在
+	} {
+		if _, ok := ss.ReadFromSSTable(path, []byte(absent)); ok {
+			t.Errorf("v1 absent key %q reported present", absent)
+		}
 	}
 }

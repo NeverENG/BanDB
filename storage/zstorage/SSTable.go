@@ -18,14 +18,17 @@ import (
 )
 
 const (
-	SSTableBlockSize   = 64
-	indexFooterMagic   uint32 = 0x49445846 // "IDXF"
-	indexFooterSize    int64  = 16         // BlockCount(4) + IndexOffset(8) + Magic(4)
+	SSTableBlockSize        = 64
+	indexFooterMagic uint32 = 0x49445846 // "IDXF"
+	indexFooterSize  int64  = 16         // BlockCount(4) + IndexOffset(8) + Magic(4)
 	// 布隆过滤器段位于块索引之后、索引 Footer 之前，向后兼容：
 	// 旧格式(v1)无此段，索引 Footer 布局与位置不变。
-	bloomTrailerMagic uint32  = 0x424c4d46 // "BLMF"
-	bloomTrailerSize  int64   = 12         // BloomLen(8) + Magic(4)
+	bloomTrailerMagic  uint32  = 0x424c4d46 // "BLMF"
+	bloomTrailerSize   int64   = 12         // BloomLen(8) + Magic(4)
 	defaultBloomFPRate float64 = 0.01
+	// maxBloomSectionBytes 限制单文件布隆段大小，防止损坏的 bloomLen 触发
+	// 超大分配或 int64 溢出导致的非法负偏移。
+	maxBloomSectionBytes uint64 = 1 << 30 // 1 GiB
 )
 
 type BlockIndexEntry struct {
@@ -192,7 +195,8 @@ func (ss *SSTable) WriteToSSTable(entries []istorage.LogEntry) error {
 	for i := range entries {
 		keys[i] = entries[i].Key
 	}
-	if err := ss.writeBloomSection(file, fullPath, keys); err != nil {
+	pb, err := writeBloomSection(file, keys)
+	if err != nil {
 		return err
 	}
 
@@ -213,6 +217,7 @@ func (ss *SSTable) WriteToSSTable(entries []istorage.LogEntry) error {
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync SSTable file failed: %v", err)
 	}
+	ss.cacheBloom(fullPath, pb) // 落盘后再缓存
 
 	info, err := file.Stat()
 	if err != nil {
@@ -330,24 +335,30 @@ func (ss *SSTable) ReadFromSSTable(filepath string, key []byte) ([]byte, bool) {
 	return ss.readFromSSTableFull(filepath, key)
 }
 
-// writeBloomSection 在块索引之后写入分区布隆过滤器及 trailer，并写入缓存。
+// writeBloomSection 在块索引之后写入分区布隆过滤器及 trailer，返回构建的
+// 过滤器供调用方在 file.Sync() 之后再写入缓存——避免崩溃时出现「缓存说有
+// 但文件未落盘」的不一致。
 // 文件布局: ...[BlockIndex][BloomBlob][BloomLen(8B)][BloomMagic(4B)][Footer]
-func (ss *SSTable) writeBloomSection(file *os.File, fullPath string, keys [][]byte) error {
+func writeBloomSection(file *os.File, keys [][]byte) (*PartitionedBloom, error) {
 	pb := BuildPartitionedBloom(keys, DefaultNamespaceSep, defaultBloomFPRate)
 	blob := pb.Encode()
 	if _, err := file.Write(blob); err != nil {
-		return err
+		return nil, err
 	}
 	if err := binary.Write(file, binary.BigEndian, uint64(len(blob))); err != nil {
-		return err
+		return nil, err
 	}
 	if err := binary.Write(file, binary.BigEndian, bloomTrailerMagic); err != nil {
-		return err
+		return nil, err
 	}
+	return pb, nil
+}
+
+// cacheBloom 将过滤器写入缓存（应在 file.Sync() 成功后调用）。
+func (ss *SSTable) cacheBloom(fullPath string, pb *PartitionedBloom) {
 	ss.bloomMu.Lock()
 	ss.bloomCache[fullPath] = pb
 	ss.bloomMu.Unlock()
-	return nil
 }
 
 // getBloom 从缓存取布隆过滤器；miss 时从文件加载（老格式返回并缓存 nil）。
@@ -366,7 +377,9 @@ func (ss *SSTable) getBloom(filepath string) *PartitionedBloom {
 }
 
 // loadBloomFromFile 读取紧邻索引 Footer 之前的布隆 trailer 与 blob。
-// 老格式(无 trailer，magic 不匹配)返回 nil。
+// 全程用 SeekEnd 负偏移定位，不依赖 Stat().Size()，从而消除
+// 「Stat 取大小 → Seek 读内容」之间文件被改写/截断的竞争窗口。
+// 老格式(无 trailer，magic 不匹配)或 bloomLen 越界返回 nil。
 func (ss *SSTable) loadBloomFromFile(filepath string) *PartitionedBloom {
 	f, err := os.Open(filepath)
 	if err != nil {
@@ -374,28 +387,24 @@ func (ss *SSTable) loadBloomFromFile(filepath string) *PartitionedBloom {
 	}
 	defer f.Close()
 
-	info, err := f.Stat()
-	if err != nil || info.Size() < indexFooterSize+bloomTrailerSize {
-		return nil
-	}
-
 	// 布隆 trailer 紧邻 16B 索引 Footer 之前
 	if _, err := f.Seek(-(indexFooterSize + bloomTrailerSize), io.SeekEnd); err != nil {
-		return nil
+		return nil // 文件比 footer+trailer 还短(含老格式小文件)
 	}
 	var bloomLen uint64
 	var magic uint32
-	binary.Read(f, binary.BigEndian, &bloomLen)
-	binary.Read(f, binary.BigEndian, &magic)
-	if magic != bloomTrailerMagic || bloomLen == 0 {
+	if err := binary.Read(f, binary.BigEndian, &bloomLen); err != nil {
 		return nil
+	}
+	if err := binary.Read(f, binary.BigEndian, &magic); err != nil {
+		return nil
+	}
+	if magic != bloomTrailerMagic || bloomLen == 0 || bloomLen > maxBloomSectionBytes {
+		return nil // 老格式 magic 不匹配，或 bloomLen 损坏/越界
 	}
 
-	bloomStart := info.Size() - indexFooterSize - bloomTrailerSize - int64(bloomLen)
-	if bloomStart < 0 {
-		return nil
-	}
-	if _, err := f.Seek(bloomStart, io.SeekStart); err != nil {
+	// blob 紧邻 trailer 之前，同样用 SeekEnd 负偏移定位
+	if _, err := f.Seek(-(indexFooterSize + bloomTrailerSize + int64(bloomLen)), io.SeekEnd); err != nil {
 		return nil
 	}
 	blob := make([]byte, bloomLen)
@@ -628,7 +637,8 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 	for i := range deduped {
 		keys[i] = deduped[i].Key
 	}
-	if err := ss.writeBloomSection(file, fullPath, keys); err != nil {
+	pb, err := writeBloomSection(file, keys)
+	if err != nil {
 		slog.Error("failed to write bloom for merged SSTable", "error", err)
 		return nil
 	}
@@ -649,6 +659,7 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		slog.Error("failed to sync merged SSTable", "error", err)
 		return nil
 	}
+	ss.cacheBloom(fullPath, pb) // 落盘后再缓存
 
 	info, err := file.Stat()
 	if err != nil {

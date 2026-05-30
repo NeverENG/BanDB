@@ -13,7 +13,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: NeverENG/BanGD-AI-PR-Review-Tool@0103ed848d3dca2b273f1a797cf280b8a563d68a
+      - uses: NeverENG/BanGD-AI-PR-Review-Tool@f23ddcc68c1e851a7e700a3c907854afff7ce13f
         with:
           anthropic_api_key: ${{ secrets.DEEPSEEK }}
           github_token: ${{ github.token }}

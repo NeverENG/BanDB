@@ -41,6 +41,9 @@ type MemTable struct {
 
 	wal *WAL
 	sst *SSTable
+
+	// hits 统计 Get 命中次数，用于观测缓存命中率
+	hits uint64
 }
 
 // SkipNode 跳表节点
@@ -117,11 +120,13 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 
 	// 先在 active 中查找（最新数据）
 	if val, found := active.search(key); found {
+		m.hits++ // 命中计数
 		return val, nil
 	}
 
 	if dirty != nil && dirty.head != nil {
 		if val, found := dirty.search(key); found {
+			m.hits++ // 命中计数
 			return val, nil
 		}
 	}
@@ -131,6 +136,11 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 	}
 
 	return nil, errors.New("Key not found")
+}
+
+// Stats 返回当前 Get 命中次数
+func (m *MemTable) Stats() uint64 {
+	return m.hits
 }
 
 // search 在跳表中查找指定 key，返回值和是否找到

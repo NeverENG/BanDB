@@ -45,6 +45,32 @@ func splitNamespace(key []byte, sep byte) (string, []byte) {
 	return "", key
 }
 
+// BuildPartitionedBloom 根据全部 key 一次性构建：先按仓库预统计元素数，
+// 再为每个仓库按其各自的 n 计算最优 m、k，最后前缀删除后插入。
+// 适合 SSTable 这类 key 集合已知且构建后不再变更的场景，sizing 比 Add
+// 逐个懒创建（共用一个 n）更精确。
+func BuildPartitionedBloom(keys [][]byte, sep byte, p float64) *PartitionedBloom {
+	counts := make(map[string]int)
+	for _, k := range keys {
+		ns, _ := splitNamespace(k, sep)
+		counts[ns]++
+	}
+	pb := &PartitionedBloom{
+		sep:        sep,
+		n:          len(keys), // 后续若再 Add 的兜底容量
+		p:          p,
+		partitions: make(map[string]*BloomFilter),
+	}
+	for ns, c := range counts {
+		pb.partitions[ns] = NewBloomFilter(c, p)
+	}
+	for _, k := range keys {
+		ns, suf := splitNamespace(k, sep)
+		pb.partitions[ns].Add(suf)
+	}
+	return pb
+}
+
 // Add 按命名空间路由到对应分区，前缀删除后插入后缀。
 func (pb *PartitionedBloom) Add(key []byte) {
 	ns, suffix := splitNamespace(key, pb.sep)

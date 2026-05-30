@@ -7,12 +7,13 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  issues: write
 
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: NeverENG/BanGD-AI-PR-Review-Tool@05dcf20addf7f62a9090a968c969990c00601ca1
+      - uses: NeverENG/BanGD-AI-PR-Review-Tool@0103ed848d3dca2b273f1a797cf280b8a563d68a
         with:
           anthropic_api_key: ${{ secrets.DEEPSEEK }}
           github_token: ${{ github.token }}

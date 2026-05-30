@@ -1,0 +1,20 @@
+name: BanGD PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: NeverENG/BanGD-AI-PR-Review-Tool@02f04948a4abd4dc184cbd9e2056836bc3085cfa
+        with:
+          anthropic_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          github_token: ${{ github.token }}
+          model: deepseek-chat
+          base_url: https://api.deepseek.com/anthropic

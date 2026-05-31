@@ -36,5 +36,7 @@ func main() {
 	// 启动服务
 	fmt.Println("Starting Server...")
 	fmt.Printf("HA initialized, initial health status: %v\n", ha.IsHealthy())
+	// 单节点下等待选主完成再开放端口，避免启动瞬间写入被拒（#86）
+	KVServer.WaitUntilReady()
 	server.Serve()
 }

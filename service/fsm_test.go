@@ -119,3 +119,32 @@ func TestFSM_UpdateOperation(t *testing.T) {
 		t.Errorf("Expected 'value2', got '%s'", string(val))
 	}
 }
+
+// TestWaitUntilReady_SingleNodeAcceptsImmediateWrite 验证 #86 的修复：
+// 新建的单节点在选主前不是 Leader（写会被拒），WaitUntilReady 返回后必为 Leader，
+// 此时立即写入应当成功。
+func TestWaitUntilReady_SingleNodeAcceptsImmediateWrite(t *testing.T) {
+	fsm, cleanup := setupTest(t)
+	defer cleanup()
+
+	go fsm.Run()
+
+	// 选主超时下界 150ms，故刚创建时必为非 Leader —— 这正是 #86 的失败窗口。
+	if state, _ := fsm.GetRaft().GetState(); state == Raft.Leader {
+		t.Fatalf("expected non-Leader before election window elapses, got Leader")
+	}
+
+	fsm.WaitUntilReady()
+
+	if state, _ := fsm.GetRaft().GetState(); state != Raft.Leader {
+		t.Fatalf("after WaitUntilReady expected Leader, got %v", state)
+	}
+
+	idx, err := fsm.AppendEntry(Command{Type: "Put", Key: []byte("k"), Value: []byte("v")})
+	if err != nil {
+		t.Fatalf("write immediately after ready failed: %v", err)
+	}
+	if err := fsm.WaitForCommit(idx); err != nil {
+		t.Fatalf("WaitForCommit failed: %v", err)
+	}
+}

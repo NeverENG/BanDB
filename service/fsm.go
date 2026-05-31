@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/NeverENG/BanDB/Raft"
 	"github.com/NeverENG/BanDB/config"
@@ -147,6 +148,25 @@ func (k *KVServer) WaitForCommit(index int) error {
 	k.raft.WaitCommitIndex(index)
 	return nil
 
+}
+
+// WaitUntilReady 在单节点集群下阻塞直到本节点成为 Leader，避免客户端端口已开放
+// 但 Raft 尚未选主时写请求被拒（AppendEntry 返回 not leader，见 #86）。
+// 单节点选主必达且很快，故无需超时。多节点集群直接返回不阻塞：Follower 永远不会
+// 成为 Leader，且其端口需立即开放以提供本地读；多节点选主窗口内的写失败需由客户端
+// 重试关闭，超出本修复范围。
+func (k *KVServer) WaitUntilReady() {
+	if len(config.G.Peers) != 1 {
+		return
+	}
+	slog.Info("single-node: waiting for leader before serving clients")
+	for {
+		if state, _ := k.raft.GetState(); state == Raft.Leader {
+			slog.Info("leader ready, opening client port")
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // EncodeCommand 编码命令为 JSON

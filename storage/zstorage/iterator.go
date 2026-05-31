@@ -87,6 +87,11 @@ func (it *sstableIterator) Next() bool {
 		it.err = err
 		return false
 	}
+	if valLen == tombstoneValLen { // 墓碑：无 value 字节，value 还原为 nil
+		it.key = key
+		it.value = nil
+		return true
+	}
 	val := make([]byte, valLen)
 	if _, err := io.ReadFull(it.f, val); err != nil {
 		it.err = err

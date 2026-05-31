@@ -115,18 +115,27 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 		return nil, errors.New("NO DATA IN MEM")
 	}
 
-	// 先在 active 中查找（最新数据）
+	// 先在 active 中查找（最新数据）。命中墓碑(val==nil)即已删除，不再下穿。
 	if val, found := active.search(key); found {
+		if val == nil {
+			return nil, errors.New("Key not found")
+		}
 		return val, nil
 	}
 
 	if dirty != nil && dirty.head != nil {
 		if val, found := dirty.search(key); found {
+			if val == nil {
+				return nil, errors.New("Key not found")
+			}
 			return val, nil
 		}
 	}
 
 	if val, found := m.getFromSSTables(key); found {
+		if val == nil { // SSTable 中的墓碑
+			return nil, errors.New("Key not found")
+		}
 		return val, nil
 	}
 
@@ -215,8 +224,13 @@ func (m *MemTable) Delete(key []byte) error {
 		return errors.New("NO DATA IN MEMTABLE")
 	}
 
-	if !m.active.delete(key) {
-		return errors.New("key not found")
+	// 写入墓碑(Value==nil)而非物理删除：物理删除只能去掉 active 中的节点，
+	// 无法 shadow 已 flush 到 SSTable 的同名旧值——读路径会从 SSTable 把它「复活」。
+	// 删除因此变为幂等盲写，不再返回 key not found。
+	m.active.insert(key, nil)
+
+	if m.active.size > config.G.MaxMemTableSize {
+		m.StartFlush()
 	}
 	return nil
 }
@@ -267,11 +281,8 @@ func (m *MemTable) recoverFromWAL() {
 	slog.Info("recovering from WAL", "entries", len(entries))
 
 	for _, entry := range entries {
-		if entry.Value == nil {
-			m.active.delete(entry.Key)
-		} else {
-			m.active.insert(entry.Key, entry.Value)
-		}
+		// Value==nil 为墓碑，按墓碑插入而非物理删除：恢复后仍需 shadow SSTable 旧值。
+		m.active.insert(entry.Key, entry.Value)
 	}
 
 	slog.Info("WAL recovery completed", "memtableSize", m.active.size)
@@ -393,14 +404,12 @@ func (m *MemTable) FlushToSSTable(entries []istorage.LogEntry) error {
 		return nil
 	}
 
-	// 创建临时跳表，按序插入（同 key 自动去重/更新）
+	// 创建临时跳表，按序插入（同 key 自动去重/更新）。
+	// Value==nil 为墓碑，按墓碑插入而非物理删除：快照中的删除需写入墓碑以 shadow
+	// 旧 SSTable 中的同名值，否则该 key 会在读路径被「复活」。
 	tmp := newSkipList()
 	for _, entry := range entries {
-		if entry.Value == nil {
-			tmp.delete(entry.Key)
-		} else {
-			tmp.insert(entry.Key, entry.Value)
-		}
+		tmp.insert(entry.Key, entry.Value)
 	}
 
 	// 从临时跳表收集有序条目

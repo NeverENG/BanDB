@@ -364,7 +364,11 @@ func collectAllEntry(sl *SkipList) []istorage.LogEntry {
 }
 
 func (m *MemTable) getFromSSTables(key []byte) ([]byte, bool) {
-	for _, meta := range m.sst.GetAllMata() {
+	// 新→旧遍历：mata 按落盘先后追加（最旧在前），故逆序取首个命中即为最新版本，
+	// 避免旧 SSTable 的陈旧值盖过新 SSTable 中对同一 key 的覆盖写。
+	metas := m.sst.GetAllMata()
+	for i := len(metas) - 1; i >= 0; i-- {
+		meta := metas[i]
 		// 首次访问时自动加载 MaxKey
 		meta.EnsureMeta()
 

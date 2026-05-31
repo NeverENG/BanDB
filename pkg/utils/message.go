@@ -3,7 +3,7 @@ package utils
 import "encoding/binary"
 
 type Message struct {
-	Id uint32
+	Id string
 
 	DataLen uint32
 	Data    []byte
@@ -19,7 +19,7 @@ func NewKVData(key []byte, value []byte) []byte {
 	return ByteBuilder(Keylen, valuelen, key, value)
 }
 
-func NewMessage(id uint32, key []byte, value []byte) *Message {
+func NewMessage(id string, key []byte, value []byte) *Message {
 	data := NewKVData(key, value)
 	return &Message{
 		Id:      id,
@@ -28,7 +28,7 @@ func NewMessage(id uint32, key []byte, value []byte) *Message {
 	}
 }
 
-func NewMessage2(id uint32, data []byte) *Message {
+func NewMessage2(id string, data []byte) *Message {
 	return &Message{
 		Id:      id,
 		DataLen: uint32(len(data)),
@@ -36,7 +36,7 @@ func NewMessage2(id uint32, data []byte) *Message {
 	}
 }
 
-func (m *Message) GetMsgID() uint32 {
+func (m *Message) GetMsgID() string {
 	return m.Id
 }
 func (m *Message) GetMsgLen() uint32 {
@@ -46,7 +46,7 @@ func (m *Message) GetData() []byte {
 	return m.Data
 }
 
-func (m *Message) SetMsgID(id uint32) {
+func (m *Message) SetMsgID(id string) {
 	m.Id = id
 }
 

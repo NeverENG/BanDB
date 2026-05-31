@@ -1,0 +1,26 @@
+// Package proto 定义客户端/服务端的命名协议常量。
+//
+// 报文格式:
+//
+//	[dataLen u32 LE][msgIDLen u16 LE][msgID bytes][data bytes]
+//
+// GET 响应 data 负载: [statusLen u8][status bytes][valueLen u32 LE][value]
+// PUT/DEL 响应 data 负载: [statusLen u8][status bytes]
+package proto
+
+// 请求/响应消息类型。
+const (
+	MsgPut     = "PUT"
+	MsgGet     = "GET"
+	MsgDelete  = "DEL"
+	MsgRespOK  = "OK"
+	MsgRespErr = "ERR"
+	MsgHello   = "HELLO"
+	MsgBye     = "BYE"
+)
+
+// 响应负载内的状态字段。
+const (
+	StatusOK    = "ok"
+	StatusError = "error"
+)

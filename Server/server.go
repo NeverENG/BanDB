@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/NeverENG/BanDB/network/banNet"
+	"github.com/NeverENG/BanDB/pkg/proto"
 	"github.com/NeverENG/BanDB/service"
 )
 
@@ -24,9 +25,9 @@ func main() {
 	router := service.NewRouter(KVServer)
 
 	// 注册路由
-	server.AddRouter(1, router) // PUT 操作
-	server.AddRouter(2, router) // GET 操作
-	server.AddRouter(3, router) // DELETE 操作
+	server.AddRouter(proto.MsgPut, router)
+	server.AddRouter(proto.MsgGet, router)
+	server.AddRouter(proto.MsgDelete, router)
 
 	// 注册连接生命周期回调
 	server.SetConnStartFunc(router.OnConnStart)

@@ -8,14 +8,14 @@ import (
 )
 
 type MsgHandle struct {
-	Arip           map[uint32]banIface.IRouter
+	Arip           map[string]banIface.IRouter
 	WorkerPoolSize uint32
 	TaskQueue      []chan banIface.IRequest
 }
 
 func NewMsgHandle() *MsgHandle {
 	return &MsgHandle{
-		Arip:           make(map[uint32]banIface.IRouter),
+		Arip:           make(map[string]banIface.IRouter),
 		WorkerPoolSize: config.G.WorkerPoolSize,
 		TaskQueue:      make([]chan banIface.IRequest, config.G.WorkerPoolSize),
 	}
@@ -23,7 +23,7 @@ func NewMsgHandle() *MsgHandle {
 
 var _ banIface.IMsgHandle = &MsgHandle{}
 
-func (m *MsgHandle) AddRouter(msgID uint32, r banIface.IRouter) {
+func (m *MsgHandle) AddRouter(msgID string, r banIface.IRouter) {
 	if _, ok := m.Arip[msgID]; ok {
 		fmt.Println("[WARN] duplicate route registration:", m.Arip)
 		return

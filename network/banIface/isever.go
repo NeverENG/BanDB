@@ -4,7 +4,7 @@ type IServer interface {
 	Start()
 	Stop()
 	Serve()
-	AddRouter(msg uint32, router IRouter)
+	AddRouter(msgID string, router IRouter)
 	GetConnMgr() IConnManager
 
 	SetConnStartFunc(func(connect IConnect))

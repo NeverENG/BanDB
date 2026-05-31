@@ -77,6 +77,18 @@ func (c *Connection) StartReader() {
 			return
 		}
 
+		// 头部之后, 先按 IDLen 读取 msgID 字符串
+		mImpl := msg.(*Message)
+		if mImpl.IDLen > 0 {
+			idBuf := make([]byte, mImpl.IDLen)
+			if _, err := io.ReadFull(c.Conn, idBuf); err != nil {
+				fmt.Println("read msgID err:", err)
+				c.ExitBuffChan <- true
+				return
+			}
+			msg.SetMsgID(string(idBuf))
+		}
+
 		var data []byte
 		if msg.GetMsgLen() > 0 {
 			data = make([]byte, msg.GetMsgLen())
@@ -173,10 +185,10 @@ func (c *Connection) RemoteAddr() net.Addr {
 	return c.Conn.RemoteAddr()
 }
 
-func (c *Connection) SendMsg(msgId uint32, data []byte) error {
+func (c *Connection) SendMsg(msgID string, data []byte) error {
 	dp := NewDataPack()
 
-	msg := NewMessage(msgId, data)
+	msg := NewMessage(msgID, data)
 	Gdata, err := dp.Pack(msg)
 	if err != nil {
 		return err
@@ -187,9 +199,9 @@ func (c *Connection) SendMsg(msgId uint32, data []byte) error {
 	return nil
 }
 
-func (c *Connection) SendBuffMsg(msgId uint32, data []byte) error {
+func (c *Connection) SendBuffMsg(msgID string, data []byte) error {
 	dp := NewDataPack()
-	msg := NewMessage(msgId, data)
+	msg := NewMessage(msgID, data)
 	Gdata, err := dp.Pack(msg)
 	if err != nil {
 		return err

@@ -19,7 +19,7 @@ func (req *Request) GetMsgData() []byte {
 	return req.msg.GetData()
 }
 
-func (req *Request) GetMsgID() uint32 {
+func (req *Request) GetMsgID() string {
 	return req.msg.GetMsgID()
 }
 

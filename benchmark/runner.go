@@ -4,12 +4,14 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/NeverENG/BanDB/network/banNet"
+	"github.com/NeverENG/BanDB/pkg/proto"
 	"github.com/NeverENG/BanDB/pkg/utils"
 )
 
@@ -240,7 +242,7 @@ func dial(addr string) (*net.TCPConn, error) {
 	return conn, nil
 }
 
-func send(conn *net.TCPConn, msgID uint32, data []byte) error {
+func send(conn *net.TCPConn, msgID string, data []byte) error {
 	msg := utils.NewMessage2(msgID, data)
 	dp := banNet.NewDataPack()
 	packed, err := dp.Pack(msg)
@@ -256,7 +258,7 @@ func recv(conn *net.TCPConn) ([]byte, error) {
 	headLen := dp.GetHeadLen()
 
 	header := make([]byte, headLen)
-	if _, err := readFull(conn, header); err != nil {
+	if _, err := io.ReadFull(conn, header); err != nil {
 		return nil, err
 	}
 
@@ -265,10 +267,18 @@ func recv(conn *net.TCPConn) ([]byte, error) {
 		return nil, err
 	}
 
+	mImpl := tempMsg.(*banNet.Message)
+	if mImpl.IDLen > 0 {
+		idBuf := make([]byte, mImpl.IDLen)
+		if _, err := io.ReadFull(conn, idBuf); err != nil {
+			return nil, err
+		}
+	}
+
 	dataLen := tempMsg.GetMsgLen()
 	if dataLen > 0 {
 		data := make([]byte, dataLen)
-		if _, err := readFull(conn, data); err != nil {
+		if _, err := io.ReadFull(conn, data); err != nil {
 			return nil, err
 		}
 		return data, nil
@@ -288,6 +298,18 @@ func readFull(conn *net.TCPConn, buf []byte) (int, error) {
 	return total, nil
 }
 
+// parseStatus 拆解响应负载 [statusLen u8][status bytes], 返回 status 字符串与剩余字节
+func parseStatus(payload []byte) (string, []byte, error) {
+	if len(payload) < 1 {
+		return "", nil, fmt.Errorf("empty payload")
+	}
+	statusLen := int(payload[0])
+	if len(payload) < 1+statusLen {
+		return "", nil, fmt.Errorf("truncated status")
+	}
+	return string(payload[1 : 1+statusLen]), payload[1+statusLen:], nil
+}
+
 func put(conn *net.TCPConn, key, value []byte) error {
 	keyLen := make([]byte, 4)
 	valLen := make([]byte, 4)
@@ -295,14 +317,15 @@ func put(conn *net.TCPConn, key, value []byte) error {
 	binary.LittleEndian.PutUint32(valLen, uint32(len(value)))
 
 	data := utils.ByteBuilder(keyLen, valLen, key, value)
-	if err := send(conn, 1, data); err != nil {
+	if err := send(conn, proto.MsgPut, data); err != nil {
 		return err
 	}
 	resp, err := recv(conn)
 	if err != nil {
 		return err
 	}
-	if len(resp) < 1 || resp[0] == 0x01 {
+	status, _, err := parseStatus(resp)
+	if err != nil || status != proto.StatusOK {
 		return fmt.Errorf("server error")
 	}
 	return nil
@@ -313,24 +336,25 @@ func get(conn *net.TCPConn, key []byte) ([]byte, error) {
 	binary.LittleEndian.PutUint32(keyLen, uint32(len(key)))
 	data := utils.ByteBuilder(keyLen, key)
 
-	if err := send(conn, 2, data); err != nil {
+	if err := send(conn, proto.MsgGet, data); err != nil {
 		return nil, err
 	}
 	resp, err := recv(conn)
 	if err != nil {
 		return nil, err
 	}
-	if len(resp) < 1 || resp[0] == 0x01 {
+	status, rest, err := parseStatus(resp)
+	if err != nil || status != proto.StatusOK {
 		return nil, fmt.Errorf("key not found")
 	}
-	if len(resp) < 5 {
+	if len(rest) < 4 {
 		return nil, fmt.Errorf("short response")
 	}
-	valueLen := binary.LittleEndian.Uint32(resp[1:5])
-	if len(resp) < 5+int(valueLen) {
+	valueLen := binary.LittleEndian.Uint32(rest[:4])
+	if len(rest) < 4+int(valueLen) {
 		return nil, fmt.Errorf("incomplete value")
 	}
-	return resp[5 : 5+valueLen], nil
+	return rest[4 : 4+valueLen], nil
 }
 
 func del(conn *net.TCPConn, key []byte) error {
@@ -338,14 +362,15 @@ func del(conn *net.TCPConn, key []byte) error {
 	binary.LittleEndian.PutUint32(keyLen, uint32(len(key)))
 	data := utils.ByteBuilder(keyLen, key)
 
-	if err := send(conn, 3, data); err != nil {
+	if err := send(conn, proto.MsgDelete, data); err != nil {
 		return err
 	}
 	resp, err := recv(conn)
 	if err != nil {
 		return err
 	}
-	if len(resp) < 1 || resp[0] == 0x01 {
+	status, _, err := parseStatus(resp)
+	if err != nil || status != proto.StatusOK {
 		return fmt.Errorf("server error")
 	}
 	return nil

@@ -1,11 +1,11 @@
 package banIface
 
 type IMessage interface {
-	GetMsgID() uint32
+	GetMsgID() string
 	GetData() []byte
 	GetMsgLen() uint32
 
 	SetMsgLen(uint32)
 	SetData([]byte)
-	SetMsgID(uint32)
+	SetMsgID(string)
 }

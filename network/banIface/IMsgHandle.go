@@ -1,7 +1,7 @@
 package banIface
 
 type IMsgHandle interface {
-	AddRouter(msgId uint32, router IRouter)
+	AddRouter(msgID string, router IRouter)
 	DoMsgHandle(request IRequest)
 	StartWorkerPool()
 	SendMsgToTaskQueue(request IRequest)

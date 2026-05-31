@@ -43,3 +43,5 @@ tmp
 *.min.html
 *.map
 *.zip
+# benchmark 脚本的临时运行目录(数据/日志)
+.bench/

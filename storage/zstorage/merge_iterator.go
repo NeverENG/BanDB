@@ -39,6 +39,11 @@ func (h *mergeHeap) Pop() any {
 
 // mergeIterator 对多个**有序**源做 K 路归并，输出 key 升序且去重
 // （同 key 仅保留 srcIdx 最大者，即最新版本）。内存占用 O(K)，不物化全部条目。
+//
+// 非 goroutine-safe：所有方法（Next/Key/Value/Err/Close）须在同一 goroutine 中
+// 串行调用。堆操作与 pull/advance 都假定独占 mergeSource，并发调用会与堆内部的
+// Less 比较产生数据竞争（container/heap 不保证比较的原子性）。merge 仅用于后台
+// compaction 单 goroutine 路径，故不内置锁。
 type mergeIterator struct {
 	h       mergeHeap
 	sources []*sstableIterator // 持有以便 Close

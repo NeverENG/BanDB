@@ -49,8 +49,8 @@ jobs:
           echo "Server failed to start"
           exit 1
 
-      - name: Run benchmark
-        run: ./bin/ban-bench -d 5s -c 4 -n 1000 -mode mixed
+      - name: Run benchmark (stress; fails on errors / unreachable server)
+        run: ./bin/ban-bench -d 5s -c 8 -n 2000 -mode mixed
 
       - name: Verify server alive
         run: |

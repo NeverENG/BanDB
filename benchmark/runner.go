@@ -56,8 +56,25 @@ func (b *Benchmark) Run() error {
 	b.stats.Stop()
 
 	PrintReport(b.cfg, b.stats)
+
+	// 收紧校验：压测必须真正跑起来且基本无错，否则视为失败（让 CI 能拦住
+	// 服务端不可达 / 协议回归导致的“假绿”）。
+	ops := b.stats.TotalOps()
+	if ops == 0 {
+		return fmt.Errorf("benchmark executed 0 operations — server unreachable or not serving")
+	}
+	if errs := b.stats.TotalErrs(); errs > 0 {
+		rate := float64(errs) / float64(ops)
+		if rate > maxErrRate {
+			return fmt.Errorf("benchmark error rate %.2f%% (%d/%d) exceeds %.0f%% threshold",
+				rate*100, errs, ops, maxErrRate*100)
+		}
+	}
 	return nil
 }
+
+// maxErrRate 是压测可容忍的最大错误率，超过则判定失败。
+const maxErrRate = 0.01
 
 func (b *Benchmark) prePopulate() error {
 	stats := NewStats()
@@ -79,6 +96,7 @@ func (b *Benchmark) prePopulate() error {
 			defer wg.Done()
 			c, err := dial(b.cfg.Addr)
 			if err != nil {
+				stats.Record(0, err) // 记为错误，避免连接失败被静默忽略导致 CI 假绿
 				return
 			}
 			defer c.Close()
@@ -148,6 +166,9 @@ func (b *Benchmark) runPhase(dur time.Duration, stats *Stats) {
 func (b *Benchmark) workerLoop(dur time.Duration, stopCh chan struct{}, stats *Stats) {
 	c, err := dial(b.cfg.Addr)
 	if err != nil {
+		if stats != nil {
+			stats.Record(0, err) // 记为错误，避免连接失败被静默忽略
+		}
 		return
 	}
 	defer c.Close()

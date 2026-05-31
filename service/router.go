@@ -195,15 +195,14 @@ func (r *Router) PostHandle(request banIface.IRequest) {
 	}
 }
 
-// OnConnStart 连接建立回调 — 向客户端发送会话开始通知
-func (r *Router) OnConnStart(conn banIface.IConnect) {
-	conn.SendBuffMsg(10, []byte("Connection established — session commenced."))
-}
+// OnConnStart 连接建立回调。
+// 不向客户端主动下发任何消息：这是纯请求-响应协议，连接建立时推送一条
+// 未经请求的问候会让客户端把它误读为下一个请求的响应，造成整条连接的
+// 响应错位（每条连接首个操作失败）。
+func (r *Router) OnConnStart(conn banIface.IConnect) {}
 
-// OnConnStop 连接关闭回调 — 向客户端发送会话终止通知
-func (r *Router) OnConnStop(conn banIface.IConnect) {
-	conn.SendBuffMsg(11, []byte("Connection terminated — session concluded."))
-}
+// OnConnStop 连接关闭回调。同理不主动下发消息。
+func (r *Router) OnConnStop(conn banIface.IConnect) {}
 
 // GetFSM 获取 FSM 实例
 func (r *Router) GetFSM() *KVServer {

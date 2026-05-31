@@ -2,6 +2,13 @@
 .idea
 .gitignore
 
+# 运行时 / 测试生成的数据，不纳入版本控制
+**/raft_data/
+Raft/raft_test_data_*/
+**/test_service_wal*.log
+**/test_memtable_wal*.log
+log/
+
 .logs
 .tmp
 .cache

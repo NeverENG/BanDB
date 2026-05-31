@@ -1,6 +1,7 @@
 package zstorage
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -302,25 +303,7 @@ func (ss *SSTable) ReadAllFromSSTable(filepath string) ([]*istorage.LogEntry, er
 
 // readDataEndOffset 读 Footer 返回数据结束偏移，老格式返回 -1
 func (ss *SSTable) readDataEndOffset(f *os.File) int64 {
-	info, err := f.Stat()
-	if err != nil || info.Size() < indexFooterSize {
-		return -1
-	}
-
-	if _, err := f.Seek(-indexFooterSize, io.SeekEnd); err != nil {
-		return -1
-	}
-	var blockCount uint32
-	var indexOffset int64
-	var magic uint32
-	binary.Read(f, binary.BigEndian, &blockCount)
-	binary.Read(f, binary.BigEndian, &indexOffset)
-	binary.Read(f, binary.BigEndian, &magic)
-
-	if magic == indexFooterMagic && blockCount > 0 && indexOffset > 0 {
-		return indexOffset
-	}
-	return -1
+	return sstableDataEnd(f)
 }
 
 func (ss *SSTable) ReadFromSSTable(filepath string, key []byte) ([]byte, bool) {
@@ -553,43 +536,28 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 
 	slog.Info("merging SSTable files", "files", len(files), "targetLevel", targetLevel)
 
-	allEntries := make([]*istorage.LogEntry, 0)
+	// 为每个源文件打开流式迭代器（srcIdx = 在 files 中的序号，越大越新）
+	iters := make([]*sstableIterator, 0, len(files))
 	for _, meta := range files {
-		entries, err := ss.ReadAllFromSSTable(meta.Filepath)
+		it, err := newSSTableIterator(meta.Filepath)
 		if err != nil {
-			slog.Error("failed to read SSTable for merge", "file", meta.Filepath, "error", err)
-			continue
+			slog.Error("failed to open SSTable iterator for merge", "file", meta.Filepath, "error", err)
+			for _, opened := range iters {
+				opened.Close()
+			}
+			return nil
 		}
-		allEntries = append(allEntries, entries...)
+		iters = append(iters, it)
 	}
 
-	if len(allEntries) == 0 {
-		slog.Warn("no entries to merge")
+	mi, err := newMergeIterator(iters)
+	if err != nil {
+		mi.Close()
+		slog.Error("failed to init merge iterator", "error", err)
 		return nil
 	}
+	defer mi.Close()
 
-	// 2. 按 key 排序
-	sort.Slice(allEntries, func(i, j int) bool {
-		return bytes.Compare(allEntries[i].Key, allEntries[j].Key) < 0
-	})
-
-	// 3. 去重：同一个key保留最后一个（最新版本）
-	deduped := make([]*istorage.LogEntry, 0)
-	keyMap := make(map[string]int) // key -> index in deduped
-
-	for _, entry := range allEntries {
-		keyStr := string(entry.Key)
-		if idx, exists := keyMap[keyStr]; exists {
-			// key 已存在，覆盖旧的
-			deduped[idx] = entry
-		} else {
-			// 新key，添加到列表
-			keyMap[keyStr] = len(deduped)
-			deduped = append(deduped, entry)
-		}
-	}
-
-	// 4. 写入新的 SSTable 文件（含块索引）
 	filename := fmt.Sprintf("sstable_merged_%d.sst", time.Now().UnixNano())
 	dir := config.G.SSTablePath
 	fullPath := filepath.Join(dir, filename)
@@ -601,30 +569,61 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 	}
 	defer file.Close()
 
+	// K 路归并流式写出：value 直接落盘，仅累积块索引(每块一条)与 key(供布隆)，
+	// 不再把全部源条目读入内存。
 	type blk struct {
 		lastKey     []byte
 		blockOffset int64
 	}
 	var blockIdx []blk
-	var buf bytes.Buffer
+	var keys [][]byte
+	var minKey, maxKey []byte
+	var dataOffset int64
+	bw := bufio.NewWriter(file)
 
-	for i, entry := range deduped {
-		bi := i / SSTableBlockSize
-		if i%SSTableBlockSize == 0 {
-			blockIdx = append(blockIdx, blk{blockOffset: int64(buf.Len())})
+	count := 0
+	for mi.Next() {
+		k := mi.Key()
+		v := mi.Value()
+		bi := count / SSTableBlockSize
+		if count%SSTableBlockSize == 0 {
+			blockIdx = append(blockIdx, blk{blockOffset: dataOffset})
 		}
-		blockIdx[bi].lastKey = entry.Key
+		blockIdx[bi].lastKey = k
 
-		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Key)))
-		buf.Write(entry.Key)
-		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Value)))
-		buf.Write(entry.Value)
+		var hdr [4]byte
+		binary.BigEndian.PutUint32(hdr[:], uint32(len(k)))
+		bw.Write(hdr[:])
+		bw.Write(k)
+		binary.BigEndian.PutUint32(hdr[:], uint32(len(v)))
+		bw.Write(hdr[:])
+		if _, werr := bw.Write(v); werr != nil {
+			slog.Error("failed to write merged entry", "error", werr)
+			return nil
+		}
+		dataOffset += int64(8 + len(k) + len(v))
+
+		keys = append(keys, k) // k 为迭代器新分配，安全持有
+		if count == 0 {
+			minKey = k
+		}
+		maxKey = k
+		count++
 	}
-
-	if _, err := file.Write(buf.Bytes()); err != nil {
+	if err := mi.Err(); err != nil {
+		slog.Error("merge iteration failed", "error", err)
+		return nil
+	}
+	if count == 0 {
+		slog.Warn("no entries to merge")
+		return nil
+	}
+	if err := bw.Flush(); err != nil {
+		slog.Error("failed to flush merged data", "error", err)
 		return nil
 	}
 
+	// 以下写尾与 WriteToSSTable 完全一致，保证字节布局相同、可被现有读路径读取
 	indexStart, _ := file.Seek(0, io.SeekCurrent)
 	for _, b := range blockIdx {
 		binary.Write(file, binary.BigEndian, uint32(len(b.lastKey)))
@@ -632,11 +631,6 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		binary.Write(file, binary.BigEndian, b.blockOffset)
 	}
 
-	// 写布隆过滤器段（块索引之后、Footer 之前）
-	keys := make([][]byte, len(deduped))
-	for i := range deduped {
-		keys[i] = deduped[i].Key
-	}
 	pb, err := writeBloomSection(file, keys)
 	if err != nil {
 		slog.Error("failed to write bloom for merged SSTable", "error", err)
@@ -670,14 +664,14 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 	newMeta := &istorage.SSTableMata{
 		Level:        targetLevel,
 		Filepath:     fullPath,
-		MinKey:       deduped[0].Key,
-		MaxKey:       deduped[len(deduped)-1].Key,
+		MinKey:       minKey,
+		MaxKey:       maxKey,
 		Size:         info.Size(),
 		MaxKeyLoaded: true,
 	}
 
 	ss.AddMata(newMeta)
-	slog.Info("SSTable merged", "level", targetLevel, "file", filename, "keys", len(deduped), "size", info.Size())
+	slog.Info("SSTable merged", "level", targetLevel, "file", filename, "keys", count, "size", info.Size())
 
 	return newMeta
 }

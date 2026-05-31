@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/NeverENG/BanDB/config"
@@ -11,8 +11,12 @@ import (
 func setupTestEngine(t *testing.T) (*Engine, func()) {
 	oldWALPath := config.G.WALPath
 	oldMaxSize := config.G.MaxMemTableSize
+	oldSSTPath := config.G.SSTablePath
 
-	config.G.WALPath = "test_engine_wal.log"
+	// 每个用例独立的临时目录，避免读到共享 ../../log 下其它运行的残留 .sst/WAL
+	dir := t.TempDir()
+	config.G.WALPath = filepath.Join(dir, "wal.log")
+	config.G.SSTablePath = dir
 	config.G.MaxMemTableSize = 100
 
 	memTable := zstorage.NewMemTable()
@@ -22,12 +26,11 @@ func setupTestEngine(t *testing.T) (*Engine, func()) {
 	go memTable.FlushWorker()
 
 	cleanup := func() {
-		// 关闭 WAL 文件
+		// 关闭 WAL 文件（临时目录由 t.TempDir 自动清理）
 		memTable.Close()
-		// 删除测试文件
-		os.Remove("test_engine_wal.log")
 		// 恢复配置
 		config.G.WALPath = oldWALPath
+		config.G.SSTablePath = oldSSTPath
 		config.G.MaxMemTableSize = oldMaxSize
 	}
 
@@ -88,8 +91,9 @@ func TestEngine_GetNonExistentKey(t *testing.T) {
 	defer cleanup()
 
 	value, err := engine.Get([]byte("nonexistent"))
-	if err != nil {
-		t.Fatalf("Engine Get failed: %v", err)
+	// 约定：缺失 key 返回错误（handleGet 据此向客户端回错误状态码）
+	if err == nil {
+		t.Errorf("Expected error for non-existent key, got value '%s'", value)
 	}
 	if value != nil {
 		t.Errorf("Expected nil value for non-existent key, got '%s'", value)
@@ -111,8 +115,9 @@ func TestEngine_Delete(t *testing.T) {
 	}
 
 	value, err := engine.Get([]byte("key1"))
-	if err != nil {
-		t.Fatalf("Engine Get after delete failed: %v", err)
+	// 约定：删除后再查应报缺失（与 handleGet 的错误语义一致）
+	if err == nil {
+		t.Errorf("Expected error after delete, got value '%s'", value)
 	}
 	if value != nil {
 		t.Errorf("Expected nil value after delete, got '%s'", value)
@@ -154,7 +159,12 @@ func TestEngine_UpdateExistingKey(t *testing.T) {
 
 func TestEngine_PutTriggersFlush(t *testing.T) {
 	oldMaxSize := config.G.MaxMemTableSize
+	oldWALPath := config.G.WALPath
+	oldSSTPath := config.G.SSTablePath
 	config.G.MaxMemTableSize = 5
+	dir := t.TempDir()
+	config.G.WALPath = filepath.Join(dir, "wal.log")
+	config.G.SSTablePath = dir
 
 	memTable := zstorage.NewMemTable()
 	engine := NewEngine(memTable)
@@ -172,6 +182,8 @@ func TestEngine_PutTriggersFlush(t *testing.T) {
 		t.Logf("MemTable size after 10 puts: %d (flush may have been triggered)", memTable.Size())
 	}
 
+	memTable.Close()
 	config.G.MaxMemTableSize = oldMaxSize
-	os.Remove("test_engine_wal.log")
+	config.G.WALPath = oldWALPath
+	config.G.SSTablePath = oldSSTPath
 }

@@ -3,5 +3,5 @@ package banIface
 type IRequest interface {
 	GetConnection() IConnect
 	GetMsgData() []byte
-	GetMsgID() uint32
+	GetMsgID() string
 }

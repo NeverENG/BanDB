@@ -5,15 +5,16 @@ import (
 )
 
 type Message struct {
-	Id uint32
+	Id string
 
+	IDLen   uint16 // 仅在 UnPack 解析头部时使用, 调用方据此再读取 Id 字节
 	DataLen uint32
 	Data    []byte
 }
 
 var _ banIface.IMessage = &Message{}
 
-func NewMessage(id uint32, data []byte) *Message {
+func NewMessage(id string, data []byte) *Message {
 	return &Message{
 		Id:      id,
 		DataLen: uint32(len(data)),
@@ -21,7 +22,7 @@ func NewMessage(id uint32, data []byte) *Message {
 	}
 }
 
-func (m *Message) GetMsgID() uint32 {
+func (m *Message) GetMsgID() string {
 	return m.Id
 }
 func (m *Message) GetMsgLen() uint32 {
@@ -31,7 +32,7 @@ func (m *Message) GetData() []byte {
 	return m.Data
 }
 
-func (m *Message) SetMsgID(id uint32) {
+func (m *Message) SetMsgID(id string) {
 	m.Id = id
 }
 

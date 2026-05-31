@@ -9,8 +9,8 @@ type IConnect interface {
 	GetConnID() uint32
 	RemoteAddr() net.Addr
 
-	SendMsg(msgId uint32, data []byte) error
-	SendBuffMsg(msgId uint32, data []byte) error
+	SendMsg(msgID string, data []byte) error
+	SendBuffMsg(msgID string, data []byte) error
 
 	SetProperty(key string, value interface{})
 	GetProperty(key string) interface{}

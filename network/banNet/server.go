@@ -23,8 +23,8 @@ type Server struct {
 	listener      *net.TCPListener
 }
 
-func (s *Server) AddRouter(msgId uint32, router banIface.IRouter) {
-	s.MsgHandle.AddRouter(msgId, router)
+func (s *Server) AddRouter(msgID string, router banIface.IRouter) {
+	s.MsgHandle.AddRouter(msgID, router)
 }
 
 func NewServer() banIface.IServer {

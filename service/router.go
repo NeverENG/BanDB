@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/NeverENG/BanDB/network/banIface"
+	"github.com/NeverENG/BanDB/pkg/proto"
 )
 
 // Router 基础路由处理器
@@ -43,18 +44,35 @@ func (r *Router) PreHandle(request banIface.IRequest) {
 
 // Handle 处理请求
 func (r *Router) Handle(request banIface.IRequest) {
-	// 获取消息类型和数据
 	msgID := request.GetMsgID()
 	data := request.GetMsgData()
 
 	switch msgID {
-	case 1: // PUT 操作
+	case proto.MsgPut:
 		r.handlePut(data, request)
-	case 2: // GET 操作
+	case proto.MsgGet:
 		r.handleGet(data, request)
-	case 3: // DELETE 操作
+	case proto.MsgDelete:
 		r.handleDelete(data, request)
 	}
+}
+
+// statusPayload 编码 [statusLen u8][status bytes]
+func statusPayload(status string) []byte {
+	buf := make([]byte, 1+len(status))
+	buf[0] = byte(len(status))
+	copy(buf[1:], status)
+	return buf
+}
+
+// sendErr 写回错误响应
+func sendErr(req banIface.IRequest) {
+	req.GetConnection().SendBuffMsg(proto.MsgRespErr, statusPayload(proto.StatusError))
+}
+
+// sendOK 写回 PUT/DEL 成功响应
+func sendOK(req banIface.IRequest) {
+	req.GetConnection().SendBuffMsg(proto.MsgRespOK, statusPayload(proto.StatusOK))
 }
 
 // handlePut 处理 PUT 操作
@@ -65,7 +83,6 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 		return
 	}
 
-	// 使用 LittleEndian 解析长度字段，与客户端保持一致
 	keyLen := int(binary.LittleEndian.Uint32(data[0:4]))
 	valueLen := int(binary.LittleEndian.Uint32(data[4:8]))
 
@@ -77,7 +94,6 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 	key := data[8 : 8+keyLen]
 	value := data[8+keyLen : 8+keyLen+valueLen]
 
-	// 创建命令并通过 Raft 追加日志
 	cmd := Command{
 		Type:  "Put",
 		Key:   key,
@@ -87,34 +103,25 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 	index, err := r.kv.AppendEntry(cmd)
 	if err != nil {
 		slog.Error("[ERROR] handlePut: AppendEntry failed", "error", err)
-		// 发送错误响应
-		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendBuffMsg(5, response)
+		sendErr(request)
 		return
 	}
 
-	// 等待 Raft 提交确认
 	if err := r.kv.WaitForCommit(index); err != nil {
 		slog.Error("[ERROR] handlePut: WaitForCommit failed", "error", err)
-		// 发送错误响应
-		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendBuffMsg(5, response)
+		sendErr(request)
 		return
 	}
 
-	// 发送成功响应
-	response := []byte{0x00} // 成功标志
-	request.GetConnection().SendBuffMsg(4, response)
+	sendOK(request)
 }
 
 // handleGet 处理 GET 操作
 func (r *Router) handleGet(data []byte, request banIface.IRequest) {
-	// 解析数据格式：key_len + key
 	if len(data) < 4 {
 		return
 	}
 
-	// 使用 LittleEndian 解析长度字段，与客户端保持一致
 	keyLen := int(binary.LittleEndian.Uint32(data[0:4]))
 
 	if len(data) < 4+keyLen {
@@ -123,36 +130,29 @@ func (r *Router) handleGet(data []byte, request banIface.IRequest) {
 
 	key := data[4 : 4+keyLen]
 
-	// 从存储获取值
 	value, err := r.kv.Get(key)
 	if err != nil {
-		// 发送错误响应：1字节状态码
-		response := []byte{0x01}
-		request.GetConnection().SendBuffMsg(5, response)
+		sendErr(request)
 		return
 	}
 
-	// 发送成功响应：状态 + value_len + value
-	response := make([]byte, 1+4+len(value))
-	response[0] = 0x00 // 成功标志
+	// 响应负载: [statusLen u8][status bytes][valueLen u32 LE][value]
+	status := proto.StatusOK
+	response := make([]byte, 1+len(status)+4+len(value))
+	response[0] = byte(len(status))
+	copy(response[1:], status)
+	binary.LittleEndian.PutUint32(response[1+len(status):1+len(status)+4], uint32(len(value)))
+	copy(response[1+len(status)+4:], value)
 
-	// 使用 LittleEndian 编码长度字段，与客户端保持一致
-	binary.LittleEndian.PutUint32(response[1:5], uint32(len(value)))
-
-	// 写入 value 数据
-	copy(response[5:], value)
-
-	request.GetConnection().SendBuffMsg(4, response)
+	request.GetConnection().SendBuffMsg(proto.MsgRespOK, response)
 }
 
 // handleDelete 处理 DELETE 操作
 func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
-	// 解析数据格式：key_len + key
 	if len(data) < 4 {
 		return
 	}
 
-	// 使用 LittleEndian 解析长度字段，与客户端保持一致
 	keyLen := int(binary.LittleEndian.Uint32(data[0:4]))
 
 	if len(data) < 4+keyLen {
@@ -161,7 +161,6 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 
 	key := data[4 : 4+keyLen]
 
-	// 创建命令并通过 Raft 追加日志
 	cmd := Command{
 		Type: "Delete",
 		Key:  key,
@@ -169,23 +168,16 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 
 	index, err := r.kv.AppendEntry(cmd)
 	if err != nil {
-		// 发送错误响应
-		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendBuffMsg(5, response)
+		sendErr(request)
 		return
 	}
 
-	// 等待 Raft 提交确认
 	if err := r.kv.WaitForCommit(index); err != nil {
-		// 发送错误响应
-		response := []byte{0x01} // 错误标志
-		request.GetConnection().SendBuffMsg(5, response)
+		sendErr(request)
 		return
 	}
 
-	// 发送成功响应
-	response := []byte{0x00} // 成功标志
-	request.GetConnection().SendBuffMsg(4, response)
+	sendOK(request)
 }
 
 // PostHandle 后置处理

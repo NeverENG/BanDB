@@ -30,6 +30,10 @@ const (
 	// maxBloomSectionBytes 限制单文件布隆段大小，防止损坏的 bloomLen 触发
 	// 超大分配或 int64 溢出导致的非法负偏移。
 	maxBloomSectionBytes uint64 = 1 << 30 // 1 GiB
+	// tombstoneValLen 作为 value 长度哨兵标记墓碑（删除标记）：磁盘上仅写该长度、
+	// 不写 value 字节，读侧据此还原为 nil。正常 value 长度不可能取此值，且老格式
+	// 文件永不含此哨兵，向后兼容。约定：内存与磁盘均以 Value==nil 表示墓碑。
+	tombstoneValLen uint32 = 0xFFFFFFFF
 )
 
 type BlockIndexEntry struct {
@@ -174,8 +178,12 @@ func (ss *SSTable) WriteToSSTable(entries []istorage.LogEntry) error {
 
 		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Key)))
 		buf.Write(entry.Key)
-		binary.Write(&buf, binary.BigEndian, uint32(len(entry.Value)))
-		buf.Write(entry.Value)
+		if entry.Value == nil { // 墓碑：仅写哨兵长度，无 value 字节
+			binary.Write(&buf, binary.BigEndian, tombstoneValLen)
+		} else {
+			binary.Write(&buf, binary.BigEndian, uint32(len(entry.Value)))
+			buf.Write(entry.Value)
+		}
 	}
 
 	// 写数据
@@ -286,9 +294,12 @@ func (ss *SSTable) ReadAllFromSSTable(filepath string) ([]*istorage.LogEntry, er
 			return nil, fmt.Errorf("failed to read value length: %v", err)
 		}
 
-		valueBytes := make([]byte, valueLen)
-		if _, err := io.ReadFull(file, valueBytes); err != nil {
-			return nil, fmt.Errorf("failed to read value: %v", err)
+		var valueBytes []byte // 墓碑(哨兵长度)还原为 nil，无 value 字节
+		if valueLen != tombstoneValLen {
+			valueBytes = make([]byte, valueLen)
+			if _, err := io.ReadFull(file, valueBytes); err != nil {
+				return nil, fmt.Errorf("failed to read value: %v", err)
+			}
 		}
 
 		entry := &istorage.LogEntry{
@@ -501,13 +512,20 @@ func (ss *SSTable) searchBlock(filepath string, key []byte, idx []BlockIndexEntr
 		if err := binary.Read(f, binary.BigEndian, &vLen); err != nil {
 			break
 		}
-		v := make([]byte, vLen)
-		if _, err := io.ReadFull(f, v); err != nil {
-			break
+		tomb := vLen == tombstoneValLen
+		var v []byte
+		if !tomb { // 墓碑无 value 字节，跳过读取
+			v = make([]byte, vLen)
+			if _, err := io.ReadFull(f, v); err != nil {
+				break
+			}
 		}
 
 		cmp := bytes.Compare(k, key)
 		if cmp == 0 {
+			if tomb { // 命中墓碑：found 但已删除
+				return nil, true
+			}
 			return v, true
 		}
 		if cmp > 0 {
@@ -595,13 +613,19 @@ func (ss *SSTable) MergeSSTable(files []*istorage.SSTableMata, targetLevel int) 
 		binary.BigEndian.PutUint32(hdr[:], uint32(len(k)))
 		bw.Write(hdr[:])
 		bw.Write(k)
-		binary.BigEndian.PutUint32(hdr[:], uint32(len(v)))
-		bw.Write(hdr[:])
-		if _, werr := bw.Write(v); werr != nil {
-			slog.Error("failed to write merged entry", "error", werr)
-			return nil
+		if v == nil { // 墓碑：写哨兵长度，无 value 字节
+			binary.BigEndian.PutUint32(hdr[:], tombstoneValLen)
+			bw.Write(hdr[:])
+			dataOffset += int64(8 + len(k))
+		} else {
+			binary.BigEndian.PutUint32(hdr[:], uint32(len(v)))
+			bw.Write(hdr[:])
+			if _, werr := bw.Write(v); werr != nil {
+				slog.Error("failed to write merged entry", "error", werr)
+				return nil
+			}
+			dataOffset += int64(8 + len(k) + len(v))
 		}
-		dataOffset += int64(8 + len(k) + len(v))
 
 		keys = append(keys, k) // k 为迭代器新分配，安全持有
 		if count == 0 {

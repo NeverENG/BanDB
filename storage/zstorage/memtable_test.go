@@ -44,6 +44,57 @@ func TestMemTable_PutAndDelete(t *testing.T) {
 	}
 }
 
+// setupMemTableTempEnv 为 MemTable 测试配置隔离的 WAL/SSTable 路径并关闭自动刷盘。
+func setupMemTableTempEnv(t *testing.T, walName string) {
+	t.Helper()
+	oldWAL := config.G.WALPath
+	oldSST := config.G.SSTablePath
+	oldMax := config.G.MaxMemTableSize
+	config.G.WALPath = walName
+	config.G.SSTablePath = t.TempDir()
+	config.G.MaxMemTableSize = 1 << 20
+	os.Remove(walName)
+	t.Cleanup(func() {
+		os.Remove(walName)
+		config.G.WALPath = oldWAL
+		config.G.SSTablePath = oldSST
+		config.G.MaxMemTableSize = oldMax
+	})
+}
+
+// TestMemTableDeleteFlushedKeyNoResurrect 删除一个已 flush 到 SSTable 的 key：
+// 墓碑必须在 active 与落盘后都 shadow 旧值，且后续 Put 可复活该 key。
+func TestMemTableDeleteFlushedKeyNoResurrect(t *testing.T) {
+	setupMemTableTempEnv(t, "test_tombstone_wal.log")
+	m := NewMemTable()
+
+	if err := m.Put([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	m.Flush() // v 落到 SSTable，active 清空
+
+	// active 墓碑应 shadow SSTable 中的旧值
+	if err := m.Delete([]byte("k")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if val, err := m.Get([]byte("k")); err == nil && val != nil {
+		t.Errorf("after delete (active tombstone) expected miss, got %q", string(val))
+	}
+
+	m.Flush() // 墓碑落到新 SSTable
+	if val, err := m.Get([]byte("k")); err == nil && val != nil {
+		t.Errorf("after delete+flush (SSTable tombstone) expected miss, got %q", string(val))
+	}
+
+	// 复活：删除后再写入应可读到新值
+	if err := m.Put([]byte("k"), []byte("v2")); err != nil {
+		t.Fatalf("re-put: %v", err)
+	}
+	if val, err := m.Get([]byte("k")); err != nil || string(val) != "v2" {
+		t.Errorf("resurrect: got %q err=%v, want v2", string(val), err)
+	}
+}
+
 // TestGetReturnsNewestAcrossSSTables 覆盖写后再 flush：同一 key 分布在新旧两个
 // SSTable 中，Get 必须返回最新版本。当前读路径按文件最旧在前取首个命中，会返回
 // 陈旧值——本测试即该正确性 bug 的回归门。

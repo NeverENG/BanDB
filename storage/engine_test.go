@@ -128,9 +128,13 @@ func TestEngine_DeleteNonExistentKey(t *testing.T) {
 	engine, cleanup := setupTestEngine(t)
 	defer cleanup()
 
-	err := engine.Delete([]byte("nonexistent"))
-	if err == nil {
-		t.Error("Expected error when deleting non-existent key, got nil")
+	// 墓碑语义下 Delete 是幂等盲写：删除不存在的 key 不报错（写入无害的墓碑），
+	// 随后 Get 仍为未找到。无需先读即可删除是 LSM/分布式写入的正确契约。
+	if err := engine.Delete([]byte("nonexistent")); err != nil {
+		t.Errorf("Delete of non-existent key should be a no-op success, got err=%v", err)
+	}
+	if val, err := engine.Get([]byte("nonexistent")); err == nil && val != nil {
+		t.Errorf("expected non-existent key to remain absent, got %q", string(val))
 	}
 }
 

@@ -157,3 +157,67 @@ func TestMergeRejectsUnsortedSource(t *testing.T) {
 		t.Error("merge should fail on a non-ascending source, got non-nil")
 	}
 }
+
+// tomb 构造一个墓碑条目 (Value==nil)。
+func tomb(k string) istorage.LogEntry { return istorage.LogEntry{Key: []byte(k), Value: nil} }
+
+// TestSSTableTombstoneRoundTrip 墓碑经 SSTable 写→点查→ReadAll→迭代器全链路：
+// 哨兵长度不触发巨型分配，墓碑还原为 found+nil，真实值不受影响。
+func TestSSTableTombstoneRoundTrip(t *testing.T) {
+	withTempSSTDir(t)
+	ss := NewSSTable()
+	if err := ss.WriteToSSTable([]istorage.LogEntry{
+		entry("a", "1"), tomb("del"), entry("z", "3"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	path := ss.GetAllMata()[0].Filepath
+
+	if v, ok := ss.ReadFromSSTable(path, []byte("del")); !ok || v != nil {
+		t.Errorf("point-read tombstone: ok=%v v=%q, want ok=true v=nil", ok, v)
+	}
+	if v, ok := ss.ReadFromSSTable(path, []byte("a")); !ok || string(v) != "1" {
+		t.Errorf("point-read a: ok=%v v=%q, want 1", ok, v)
+	}
+
+	entries, err := ss.ReadAllFromSSTable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if string(e.Key) == "del" && e.Value != nil {
+			t.Errorf("ReadAll tombstone value = %q, want nil", e.Value)
+		}
+	}
+
+	it, err := newSSTableIterator(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	for it.Next() {
+		if string(it.Key()) == "del" && it.Value() != nil {
+			t.Errorf("iterator tombstone value = %q, want nil", it.Value())
+		}
+	}
+	if it.Err() != nil {
+		t.Fatalf("iterator err: %v", it.Err())
+	}
+}
+
+// TestMergePreservesTombstone 旧文件含值、新文件含同 key 墓碑：归并须保留墓碑
+// (newest 胜出)，合并后点查仍为已删除，而不是把旧值复活。
+func TestMergePreservesTombstone(t *testing.T) {
+	withTempSSTDir(t)
+	ss := NewSSTable()
+	ss.WriteToSSTable([]istorage.LogEntry{entry("k", "v")}) // srcIdx 0（旧）
+	ss.WriteToSSTable([]istorage.LogEntry{tomb("k")})       // srcIdx 1（新，墓碑）
+
+	merged := ss.MergeSSTable(ss.GetLevelFiles(0), 1)
+	if merged == nil {
+		t.Fatal("merge returned nil")
+	}
+	if v, ok := ss.ReadFromSSTable(merged.Filepath, []byte("k")); !ok || v != nil {
+		t.Errorf("merged k: ok=%v v=%q, want ok=true v=nil (tombstone wins over older value)", ok, v)
+	}
+}

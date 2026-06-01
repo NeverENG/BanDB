@@ -40,6 +40,29 @@ func setupTest(t *testing.T) (*KVServer, func()) {
 	return fsm, cleanup
 }
 
+// TestFSM_EmptyValueNotTombstone 验证空值经 EncodeCommand→Apply 全链路后仍是
+// 一个真实的空值(found)，而非被误当作墓碑(Value==nil 删除)。这是墓碑约定
+// "真实值永不为 nil" 的边界：若 []byte{} 在 JSON 往返中退化为 nil，空值会被
+// 静默删除——本测试守住该不变量。
+func TestFSM_EmptyValueNotTombstone(t *testing.T) {
+	fsm, cleanup := setupTest(t)
+	defer cleanup()
+
+	cmdBytes, err := EncodeCommand(Command{Type: "Put", Key: []byte("ek"), Value: []byte{}})
+	if err != nil {
+		t.Fatalf("EncodeCommand: %v", err)
+	}
+	fsm.Apply(Raft.LogEntry{Index: 0, Term: 1, Command: cmdBytes})
+
+	val, err := fsm.Get([]byte("ek"))
+	if err != nil {
+		t.Fatalf("empty value read back as missing (treated as tombstone): %v", err)
+	}
+	if len(val) != 0 {
+		t.Errorf("expected empty value, got %q", string(val))
+	}
+}
+
 func TestFSM_BasicOperation(t *testing.T) {
 	fsm, cleanup := setupTest(t)
 	defer cleanup()

@@ -174,10 +174,8 @@ func (r *RaftRPC) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesRep
 				slog.Error("failed to rebuild log", "error", err)
 			}
 		} else {
-			for _, entry := range newEntries {
-				if err := r.raft.wal.AppendLog(entry); err != nil {
-					slog.Error("failed to append log", "error", err)
-				}
+			if err := r.raft.wal.AppendLogs(newEntries); err != nil {
+				slog.Error("failed to append logs", "error", err)
 			}
 		}
 		r.raft.persistStateLocked()

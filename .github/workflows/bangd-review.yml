@@ -13,7 +13,7 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
-      - uses: NeverENG/BanGD-AI-PR-Review-Tool@70740458e4e9698803ec624cd60ce62254a04c5a # v1.0.0
+      - uses: NeverENG/BanGD-AI-PR-Review-Tool@aa60007cde29e62e3085c435f40167f839469874 # main 最新 (v1/v1.0.0 tag 落后于 main)
         with:
           anthropic_api_key: ${{ secrets.DEEPSEEK }}
           github_token: ${{ github.token }}

@@ -39,7 +39,6 @@ type MemTable struct {
 	compactCh chan bool
 	stopCh    chan struct{}
 
-	wal *WAL
 	sst *SSTable
 }
 
@@ -64,14 +63,12 @@ func NewMemTable() *MemTable {
 		FlushChan: make(chan bool, 1),
 		compactCh: make(chan bool, 1),
 		stopCh:    make(chan struct{}),
-		wal:       NewWAL(),
 		sst:       NewSSTable(),
 	}
 	go mt.FlushWorker()
 	go mt.ListenCompactCh()
 
 	go mt.sst.LoadSSTableMetaList()
-	mt.recoverFromWAL()
 	return mt
 }
 
@@ -267,38 +264,9 @@ func (sl *SkipList) delete(key []byte) bool {
 	return true
 }
 
-func (m *MemTable) recoverFromWAL() {
-	entries, err := m.wal.Read()
-	if err != nil {
-		slog.Warn("failed to read WAL", "error", err)
-		return
-	}
-
-	if len(entries) == 0 {
-		return
-	}
-
-	slog.Info("recovering from WAL", "entries", len(entries))
-
-	for _, entry := range entries {
-		// Value==nil 为墓碑，按墓碑插入而非物理删除：恢复后仍需 shadow SSTable 旧值。
-		m.active.insert(entry.Key, entry.Value)
-	}
-
-	slog.Info("WAL recovery completed", "memtableSize", m.active.size)
-}
-
-func (m *MemTable) Sync() error {
-	return m.wal.Sync()
-}
-
-func (m *MemTable) Clear() error {
-	return m.wal.Clear()
-}
-
 func (m *MemTable) Close() error {
 	close(m.stopCh)
-	return m.wal.Close()
+	return nil
 }
 
 func (m *MemTable) StartFlush() {
@@ -313,7 +281,7 @@ func (m *MemTable) StartFlush() {
 //  1. 持锁交换 active → dirty（active 变为 dirty 的不可变快照）
 //  2. 创建新的空 active 表用于接受后续写入
 //  3. 释放锁，在锁外将 dirty 数据写入 SSTable
-//  4. 刷盘完成后清除 WAL，将 dirty 置 nil
+//  4. 刷盘完成后将 dirty 置 nil
 func (m *MemTable) Flush() {
 	// 步骤 1-2: 持锁进行交换（快速操作）
 	m.mu.Lock()
@@ -334,11 +302,6 @@ func (m *MemTable) Flush() {
 	if err != nil {
 		slog.Error("flush error", "error", err)
 		return
-	}
-
-	err = m.Clear()
-	if err != nil {
-		slog.Error("WAL clear error", "error", err)
 	}
 
 	m.mu.Lock()

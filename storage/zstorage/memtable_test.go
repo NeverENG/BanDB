@@ -95,6 +95,29 @@ func TestMemTableDeleteFlushedKeyNoResurrect(t *testing.T) {
 	}
 }
 
+// TestMemTableEmptyValueNotTombstone 空值是真实值, 不能被当作墓碑：
+// Put(k, []byte{}) 经 flush 落盘后, Get 必须返回 found+空, 而非未找到。
+func TestMemTableEmptyValueNotTombstone(t *testing.T) {
+	setupMemTableTempEnv(t, "test_emptyval_wal.log")
+	m := NewMemTable()
+
+	if err := m.Put([]byte("e"), []byte{}); err != nil {
+		t.Fatalf("put empty: %v", err)
+	}
+	// active 中
+	if val, err := m.Get([]byte("e")); err != nil || val == nil {
+		t.Fatalf("empty value in active read as missing: val=%v err=%v", val, err)
+	}
+	m.Flush() // 空值落盘
+	val, err := m.Get([]byte("e"))
+	if err != nil {
+		t.Fatalf("empty value after flush read as missing (tombstone): %v", err)
+	}
+	if len(val) != 0 {
+		t.Errorf("expected empty value after flush, got %q", string(val))
+	}
+}
+
 // TestGetReturnsNewestAcrossSSTables 覆盖写后再 flush：同一 key 分布在新旧两个
 // SSTable 中，Get 必须返回最新版本。当前读路径按文件最旧在前取首个命中，会返回
 // 陈旧值——本测试即该正确性 bug 的回归门。

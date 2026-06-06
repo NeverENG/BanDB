@@ -31,7 +31,10 @@ func main() {
 	valueSize := flag.Int("vs", 64, "IMU 样本 value 字节数")
 	qDepth := flag.Int("qdepth", 1024, "有界队列深度；满即记为丢帧")
 	memTableSize := flag.Int("memtable", 4096, "MaxMemTableSize（active 表条目阈值，调小以强制频繁 flush 验内存封顶）")
+	budget := flag.Int64("budget", 64<<20, "MemTableMaxInflightBytes 字节预算（令牌桶背压）；0 关闭背压")
 	flag.Parse()
+
+	config.G.MemTableMaxInflightBytes = *budget // 由命令行覆盖，便于 before/after 对比
 
 	rateList, err := parseRates(*rates)
 	if err != nil {
@@ -45,6 +48,7 @@ func main() {
 	fmt.Printf("  Value size:   %d bytes\n", *valueSize)
 	fmt.Printf("  Queue depth:  %d\n", *qDepth)
 	fmt.Printf("  MemTable cap: %d entries\n", *memTableSize)
+	fmt.Printf("  Inflight budget: %d bytes (0=背压关闭)\n", *budget)
 	fmt.Printf("  Duration:     sat=%s  open-loop=%s/rate\n", *satDur, *dur)
 	fmt.Printf("  Open rates:   %v Hz\n", rateList)
 	fmt.Println("========================================")
@@ -55,8 +59,8 @@ func main() {
 	hasSat := *satDur > 0
 	if hasSat {
 		sat = runSaturation(*satDur, *valueSize, *memTableSize)
-		fmt.Printf("[Saturation] throughput=%.0f writes/s  mean=%s  heap_peak=%s  sys_peak=%s\n\n",
-			sat.Throughput, lat(sat.MeanLat), mib(sat.HeapPeak), mib(sat.SysPeak))
+		fmt.Printf("[Saturation] throughput=%.0f writes/s  mean=%s  inflight_peak=%s  heap_peak=%s\n\n",
+			sat.Throughput, lat(sat.MeanLat), mib(sat.InflightPeak), mib(sat.HeapPeak))
 	}
 
 	// 2) 开环相：各速率档证 0 丢帧 + 尾延迟 + 内存封顶。
@@ -72,17 +76,18 @@ func main() {
 
 // Result 单相/单档的压测结果
 type Result struct {
-	Label      string // "saturated" 或 "<rate>Hz"
-	RateHz     int    // 开环目标速率；饱和相为 0
-	Duration   time.Duration
-	Produced   int64         // 应投递样本数（饱和相 = 写入数）
-	Dropped    int64         // 队列满导致的丢帧数
-	Written    int64         // 实际写入引擎的样本数
-	Throughput float64       // 实际写入吞吐 (writes/sec)
-	MeanLat    time.Duration // 饱和相用：1/throughput
+	Label                      string // "saturated" 或 "<rate>Hz"
+	RateHz                     int    // 开环目标速率；饱和相为 0
+	Duration                   time.Duration
+	Produced                   int64         // 应投递样本数（饱和相 = 写入数）
+	Dropped                    int64         // 队列满导致的丢帧数
+	Written                    int64         // 实际写入引擎的样本数
+	Throughput                 float64       // 实际写入吞吐 (writes/sec)
+	MeanLat                    time.Duration // 饱和相用：1/throughput
 	P50, P99, P999, P9999, Max time.Duration
-	HeapPeak   uint64 // HeapAlloc 峰值 (bytes)
-	SysPeak    uint64 // Sys 峰值 (bytes)
+	HeapPeak                   uint64 // HeapAlloc 峰值 (bytes)
+	SysPeak                    uint64 // Sys 峰值 (bytes)
+	InflightPeak               uint64 // 未刷盘字节信用峰值 (bytes)
 }
 
 // setupEngine 指向临时目录并以小 memtable 创建引擎，返回引擎与清理函数。
@@ -104,8 +109,8 @@ func setupEngine(memTableSize int) (*storage.Engine, *zstorage.MemTable, func())
 	return engine, memTable, cleanup
 }
 
-// memSampler 每 100ms 采样一次 MemStats，返回停止函数（调用后回填峰值）。
-func memSampler(heapPeak, sysPeak *uint64) func() {
+// memSampler 每 100ms 采样一次堆内存与未刷盘字节信用，返回停止函数（调用后回填峰值）。
+func memSampler(mt *zstorage.MemTable, heapPeak, sysPeak, inflightPeak *uint64) func() {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -124,6 +129,9 @@ func memSampler(heapPeak, sysPeak *uint64) func() {
 				if ms.Sys > *sysPeak {
 					*sysPeak = ms.Sys
 				}
+				if inflight := uint64(mt.InflightBytes()); inflight > *inflightPeak {
+					*inflightPeak = inflight
+				}
 			case <-stop:
 				return
 			}
@@ -138,12 +146,12 @@ func memSampler(heapPeak, sysPeak *uint64) func() {
 // runSaturation 闭环打满：不做 per-op 计时（避免计时器开销污染亚微秒写），
 // 只数总量得到吞吐天花板，平均延迟由 1/throughput 推导。
 func runSaturation(dur time.Duration, valueSize, memTableSize int) Result {
-	engine, _, cleanup := setupEngine(memTableSize)
+	engine, memTable, cleanup := setupEngine(memTableSize)
 	defer cleanup()
 
 	runtime.GC() // 清掉上一轮残留，使本轮 heap 峰值只反映本轮活对象
-	var heapPeak, sysPeak uint64
-	stopMem := memSampler(&heapPeak, &sysPeak)
+	var heapPeak, sysPeak, inflightPeak uint64
+	stopMem := memSampler(memTable, &heapPeak, &sysPeak, &inflightPeak)
 
 	var written, seq int64
 	start := time.Now()
@@ -167,26 +175,27 @@ func runSaturation(dur time.Duration, valueSize, memTableSize int) Result {
 		mean = time.Duration(float64(time.Second) / tput)
 	}
 	return Result{
-		Label:      "saturated",
-		Duration:   elapsed,
-		Produced:   written,
-		Written:    written,
-		Throughput: tput,
-		MeanLat:    mean,
-		HeapPeak:   heapPeak,
-		SysPeak:    sysPeak,
+		Label:        "saturated",
+		Duration:     elapsed,
+		Produced:     written,
+		Written:      written,
+		Throughput:   tput,
+		MeanLat:      mean,
+		HeapPeak:     heapPeak,
+		SysPeak:      sysPeak,
+		InflightPeak: inflightPeak,
 	}
 }
 
 // runOpenLoop 开环定速率：生产者按固定速率非阻塞投递，队列满即丢帧；
 // 消费者单写入者，per-op 计时（此处速率有界，计时开销可忽略），得到尾延迟。
 func runOpenLoop(rateHz int, dur time.Duration, valueSize, qDepth, memTableSize int) Result {
-	engine, _, cleanup := setupEngine(memTableSize)
+	engine, memTable, cleanup := setupEngine(memTableSize)
 	defer cleanup()
 
 	runtime.GC() // 清掉上一轮残留，使本轮 heap 峰值只反映本轮活对象
-	var heapPeak, sysPeak uint64
-	stopMem := memSampler(&heapPeak, &sysPeak)
+	var heapPeak, sysPeak, inflightPeak uint64
+	stopMem := memSampler(memTable, &heapPeak, &sysPeak, &inflightPeak)
 
 	type sample struct{ key, value []byte }
 	q := make(chan sample, qDepth)
@@ -229,20 +238,21 @@ func runOpenLoop(rateHz int, dur time.Duration, valueSize, qDepth, memTableSize 
 
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	return Result{
-		Label:      fmt.Sprintf("%dHz", rateHz),
-		RateHz:     rateHz,
-		Duration:   elapsed,
-		Produced:   produced,
-		Dropped:    dropped,
-		Written:    written,
-		Throughput: float64(written) / elapsed.Seconds(),
-		P50:        pct(latencies, 0.50),
-		P99:        pct(latencies, 0.99),
-		P999:       pct(latencies, 0.999),
-		P9999:      pct(latencies, 0.9999),
-		Max:        pct(latencies, 1.0),
-		HeapPeak:   heapPeak,
-		SysPeak:    sysPeak,
+		Label:        fmt.Sprintf("%dHz", rateHz),
+		RateHz:       rateHz,
+		Duration:     elapsed,
+		Produced:     produced,
+		Dropped:      dropped,
+		Written:      written,
+		Throughput:   float64(written) / elapsed.Seconds(),
+		P50:          pct(latencies, 0.50),
+		P99:          pct(latencies, 0.99),
+		P999:         pct(latencies, 0.999),
+		P9999:        pct(latencies, 0.9999),
+		Max:          pct(latencies, 1.0),
+		HeapPeak:     heapPeak,
+		SysPeak:      sysPeak,
+		InflightPeak: inflightPeak,
 	}
 }
 
@@ -262,7 +272,7 @@ func printResult(r Result) {
 	fmt.Printf("  produced=%d  written=%d  dropped=%d\n", r.Produced, r.Written, r.Dropped)
 	fmt.Printf("  throughput=%.0f writes/s  p99.9=%s  p99.99=%s  max=%s\n",
 		r.Throughput, lat(r.P999), lat(r.P9999), lat(r.Max))
-	fmt.Printf("  heap_peak=%s  sys_peak=%s\n", mib(r.HeapPeak), mib(r.SysPeak))
+	fmt.Printf("  inflight_peak=%s  heap_peak=%s  sys_peak=%s\n", mib(r.InflightPeak), mib(r.HeapPeak), mib(r.SysPeak))
 	fmt.Println()
 }
 
@@ -274,11 +284,11 @@ func printTable(hasSat bool, sat Result, rs []Result) {
 		fmt.Printf("  ceiling (saturated): %.0f writes/s  heap_peak=%s\n", sat.Throughput, mib(sat.HeapPeak))
 	}
 	fmt.Println("  --- open-loop (fixed rate) ---")
-	fmt.Printf("  %-10s %-12s %-9s %-9s %-9s %-10s\n",
-		"rate", "throughput", "dropped", "p99.9", "max", "heap_peak")
+	fmt.Printf("  %-10s %-12s %-9s %-9s %-13s %-10s\n",
+		"rate", "throughput", "dropped", "max", "inflight_peak", "heap_peak")
 	for _, r := range rs {
-		fmt.Printf("  %-10s %-12.0f %-9d %-9s %-9s %-10s\n",
-			r.Label, r.Throughput, r.Dropped, lat(r.P999), lat(r.Max), mib(r.HeapPeak))
+		fmt.Printf("  %-10s %-12.0f %-9d %-9s %-13s %-10s\n",
+			r.Label, r.Throughput, r.Dropped, lat(r.Max), mib(r.InflightPeak), mib(r.HeapPeak))
 	}
 	fmt.Println("========================================")
 	fmt.Println("  Durability: N/A at engine layer (no storage WAL — see A2 / Raft path)")

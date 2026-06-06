@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/pkg/credit"
 	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
@@ -21,9 +22,10 @@ var (
 
 // SkipList 跳表数据结构，封装跳表的 size、level 和 head 指针
 type SkipList struct {
-	size  int
-	level int
-	head  *SkipNode
+	size     int
+	level    int
+	head     *SkipNode
+	byteSize int64 // 当前表内 key+value 的累计字节数（覆盖写按增量维护）
 }
 
 // MemTable 基于跳表的双表内存表实现
@@ -40,6 +42,8 @@ type MemTable struct {
 	stopCh    chan struct{}
 
 	sst *SSTable
+
+	credits *credit.Pool // 字节级令牌桶背压：限制未刷盘数据的内存占用
 }
 
 // SkipNode 跳表节点
@@ -64,6 +68,7 @@ func NewMemTable() *MemTable {
 		compactCh: make(chan bool, 1),
 		stopCh:    make(chan struct{}),
 		sst:       NewSSTable(),
+		credits:   credit.New(config.G.MemTableMaxInflightBytes),
 	}
 	go mt.FlushWorker()
 	go mt.ListenCompactCh()
@@ -156,25 +161,49 @@ func (sl *SkipList) search(key []byte) ([]byte, bool) {
 
 // Put 插入或更新键值对，始终操作 active 表
 func (m *MemTable) Put(key []byte, value []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	full := int64(len(key)) + int64(len(value))
+	m.acquireCredit(full) // 字节级令牌桶背压：信用不足则阻塞
 
+	m.mu.Lock()
 	if m.active == nil || m.active.head == nil {
+		m.mu.Unlock()
+		m.credits.Release(full) // 写入未发生，归还信用
 		return errors.New("NO DATA IN MEMTABLE")
 	}
 
-	m.active.insert(key, value)
+	delta := m.active.insert(key, value)
 
 	// 检查 active 表大小是否超过阈值，触发刷盘
 	if m.active.size > config.G.MaxMemTableSize {
 		m.StartFlush()
 	}
+	m.mu.Unlock()
 
+	// 覆盖写实际增量 < 预占的 full，归还多占部分，避免信用单调泄漏
+	if over := full - delta; over != 0 {
+		m.credits.Release(over)
+	}
 	return nil
 }
 
+// acquireCredit 为本次写入预占 n 字节信用；不足时先触发刷盘以归还信用，再阻塞等待。
+func (m *MemTable) acquireCredit(n int64) {
+	if m.credits.TryAcquire(n) {
+		return
+	}
+	m.StartFlush() // 确保有 flush 在路上来归还信用，避免永久阻塞
+	m.credits.Acquire(n)
+}
+
+// InflightBytes 返回当前未刷盘（active + 正在刷的 dirty）占用的字节信用，供观测/压测使用。
+func (m *MemTable) InflightBytes() int64 {
+	return m.credits.Used()
+}
+
 // insert 在跳表中插入键值对（无锁版本，由调用者保证线程安全）
-func (sl *SkipList) insert(key []byte, value []byte) {
+// insert 插入或覆盖 key，并返回本次操作使 byteSize 变化的增量（覆盖写可能为负）。
+// 调用方用该增量做背压信用对账。
+func (sl *SkipList) insert(key []byte, value []byte) int64 {
 	update := make([]*SkipNode, maxLevel)
 	p := sl.head
 
@@ -188,9 +217,11 @@ func (sl *SkipList) insert(key []byte, value []byte) {
 	// 检查 key 是否已存在
 	p = p.Next[0]
 	if p != nil && bytes.Compare(p.Key, key) == 0 {
-		// key 已存在，更新值
+		// key 已存在，更新值：byteSize 按新旧 value 差值调整
+		delta := int64(len(value)) - int64(len(p.Value))
 		p.Value = value
-		return
+		sl.byteSize += delta
+		return delta
 	}
 
 	// 生成新节点的随机层级
@@ -210,24 +241,35 @@ func (sl *SkipList) insert(key []byte, value []byte) {
 	}
 
 	sl.size++
+	delta := int64(len(key)) + int64(len(value))
+	sl.byteSize += delta
+	return delta
 }
 
 // Delete 删除指定 key 的节点，始终操作 active 表
 func (m *MemTable) Delete(key []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	full := int64(len(key)) // 墓碑 value 为 nil
+	m.acquireCredit(full)
 
+	m.mu.Lock()
 	if m.active == nil || m.active.head == nil {
+		m.mu.Unlock()
+		m.credits.Release(full)
 		return errors.New("NO DATA IN MEMTABLE")
 	}
 
 	// 写入墓碑(Value==nil)而非物理删除：物理删除只能去掉 active 中的节点，
 	// 无法 shadow 已 flush 到 SSTable 的同名旧值——读路径会从 SSTable 把它「复活」。
 	// 删除因此变为幂等盲写，不再返回 key not found。
-	m.active.insert(key, nil)
+	delta := m.active.insert(key, nil)
 
 	if m.active.size > config.G.MaxMemTableSize {
 		m.StartFlush()
+	}
+	m.mu.Unlock()
+
+	if over := full - delta; over != 0 {
+		m.credits.Release(over)
 	}
 	return nil
 }
@@ -285,13 +327,15 @@ func (m *MemTable) StartFlush() {
 func (m *MemTable) Flush() {
 	// 步骤 1-2: 持锁进行交换（快速操作）
 	m.mu.Lock()
-	if m.active.size == 0 {
-		m.mu.Unlock()
-		return
+	// dirty 非 nil 说明上一次刷盘失败遗留，本次直接重试它，不再交换（避免覆盖丢数据）
+	if m.dirty == nil {
+		if m.active.size == 0 {
+			m.mu.Unlock()
+			return
+		}
+		m.dirty = m.active
+		m.active = newSkipList()
 	}
-
-	m.dirty = m.active
-	m.active = newSkipList()
 	dirty := m.dirty
 	m.mu.Unlock()
 
@@ -301,13 +345,16 @@ func (m *MemTable) Flush() {
 	err := m.sst.WriteToSSTable(allEntries)
 	if err != nil {
 		slog.Error("flush error", "error", err)
+		m.StartFlush() // 重试；dirty 保留不丢数据，信用待重试成功后再释放
 		return
 	}
 
 	m.mu.Lock()
+	freed := dirty.byteSize
 	m.dirty = nil
 	m.mu.Unlock()
 
+	m.credits.Release(freed) // 归还信用，唤醒被背压阻塞的写
 	slog.Debug("flush completed")
 }
 

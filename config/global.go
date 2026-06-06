@@ -23,6 +23,10 @@ type GlobalConfig struct {
 	MaxMemTableSize   int
 	MaxCompactionSize int
 
+	// MemTableMaxInflightBytes 未刷盘数据（active + 正在刷的 dirty）的字节预算。
+	// 字节级令牌桶背压：超出预算时写入阻塞，等 flush 归还信用。<=0 关闭背压。
+	MemTableMaxInflightBytes int64
+
 	TcpServer      banIface.IServer
 	MaxConn        int
 	MaxPackageSize uint32
@@ -81,25 +85,26 @@ func NewGlobalConfig() *GlobalConfig {
 	logDir := defaultLogDir()
 	global := &GlobalConfig{
 
-		Name:                    "Raft",
-		Port:                    8080,
-		Host:                    "localhost",
-		Version:                 "1.0.0",
-		MaxConn:                 1000,
-		MaxPackageSize:          1024,
-		WorkerPoolSize:          10,
-		MaxWorkerTaskLen:        10000,
-		MaxMsgChanLen:           100,
-		TcpServer:               nil,
-		MaxMemTableP:            0.5,
-		MaxMemTableLevel:        32,
-		MaxMemTableSize:         1024,
-		WALPath:                 filepath.Join(logDir, "wal.log"),
-		SSTablePath:             logDir,
-		Peers:                   []string{"localhost:8080"}, // 默认单节点
-		Me:                      0,                          // 默认节点ID
-		RaftSnapshotThreshold:   1000,                       // 默认快照阈值
-		RaftSnapshotKeepEntries: 100,                        // 默认保留条目数
+		Name:                     "Raft",
+		Port:                     8080,
+		Host:                     "localhost",
+		Version:                  "1.0.0",
+		MaxConn:                  1000,
+		MaxPackageSize:           1024,
+		WorkerPoolSize:           10,
+		MaxWorkerTaskLen:         10000,
+		MaxMsgChanLen:            100,
+		TcpServer:                nil,
+		MaxMemTableP:             0.5,
+		MaxMemTableLevel:         32,
+		MaxMemTableSize:          1024,
+		MemTableMaxInflightBytes: 64 << 20, // 64MiB 未刷盘字节预算
+		WALPath:                  filepath.Join(logDir, "wal.log"),
+		SSTablePath:              logDir,
+		Peers:                    []string{"localhost:8080"}, // 默认单节点
+		Me:                       0,                          // 默认节点ID
+		RaftSnapshotThreshold:    1000,                       // 默认快照阈值
+		RaftSnapshotKeepEntries:  100,                        // 默认保留条目数
 	}
 	global.Init()
 	global.ParseFlags()

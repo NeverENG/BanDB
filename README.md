@@ -1,240 +1,117 @@
-# BanDB Flux
+# BanDB Flux —— 可编程边缘采集缓冲网关
 
-BanDB Flux is a high-performance key-value database written in Go. It combines a self-developed TCP networking layer, an LSM-style storage engine, and Raft-backed write replication for a lightweight distributed KV service.
+BanDB Flux 是一个用 Go 从零实现的轻量级 Key-Value 存储，自带**自研 TCP 框架**、**LSM 存储引擎**与**基于 Raft 的写复制**。
 
-The project is designed as a programmable ingestion and pre-storage layer for write-heavy systems, such as log collection, clickstream capture, order/event buffering, and real-time data pipelines.
+它面向**具身智能 / AIoT 的边缘高频多模态采集**场景：坐在传感器采集入口，做成熟栈（ROS2/DDS、rosbag2/MCAP、Zenoh）通常不做的一件事——**在数据落盘前做可编程预处理，并在边缘侧查询、只回传命中的关键切片**。
 
-## Documentation Index
+> **定位红线**：BanDB **不替代**机器人中间件，是它们之外的「采集入口可编程层」。"单二进制 / 低内存"是边缘赛道的入场券，不当作护城河来吹。
 
-- [Original README / Chinese draft](README.zh-CN.md)
-- [Architecture diagram](architecture-diagram.md)
-- [Client guide](client/README.md)
-- [Storage optimization notes](%E8%BF%AD%E4%BB%A3%E6%96%B9%E6%A1%88/storage-bottleneck-optimization.md)
+---
 
-## Table of Contents
+## 它解决什么
 
-- [Features](#features)
-- [Architecture](#architecture)
-- [Project Layout](#project-layout)
-- [Getting Started](#getting-started)
-- [Client Usage](#client-usage)
-- [Protocol](#protocol)
-- [Configuration](#configuration)
-- [Testing](#testing)
-- [Use Cases](#use-cases)
-- [Roadmap](#roadmap)
+边缘设备（机器人机载电脑、车载、采集终端）在高频采集相机帧、IMU 等多模态数据时，硬件资源受限、网络弱而不稳。BanDB Flux 的角色是：
 
-## Features
+1. **本地优先高频落盘**：传感器只管写，LSM 引擎用内存跳表吸收瞬时高频写入，后台异步 Compaction 顺序落盘。
+2. **落盘前可编程预处理**：通过 `PreHandle` 钩子在网络层、数据进系统的那一刻做校验/裁剪/脱敏/丢弃畸形帧。
+3. **边缘查询 + 切片上传**（建设中）：本地按时间范围 + 谓词定位"黄金切片"，只回传命中数据，而非整段原始流。
 
-- **Self-developed TCP framework**: BanNet implements the server, connection management, request routing, message packing, and lifecycle hooks without depending on HTTP or gRPC for the core KV path.
-- **Binary TLV protocol**: requests use compact framed messages with a message ID and binary payload.
-- **KV command support**: the service currently exposes `put`, `get`, and `delete` through the TCP client.
-- **Programmable hooks**: routers support pre-handle and post-handle callbacks, which can be used for validation, filtering, lightweight ETL, or request instrumentation.
-- **LSM-style storage path**: writes enter a MemTable, are protected by WAL, and can be flushed into SSTable files.
-- **Raft integration**: mutating commands are appended through the Raft path before being applied to the storage engine.
-- **Snapshot support**: Raft state includes snapshot-related persistence and recovery paths.
-- **Interactive client**: the `client` package provides a Redis-CLI-like interactive mode and a one-shot command mode.
+---
 
-## Architecture
+## 核心能力（已实现）
 
-At a high level, BanDB Flux is split into four layers:
+- **自研 TCP 框架 BanNet**：连接管理、worker pool、消息打解包与生命周期钩子，核心 KV 路径不依赖 HTTP/gRPC。
+- **二进制 TLV 协议**：紧凑的定长帧头 + msgID + 二进制负载。
+- **可编程钩子**：路由支持 `PreHandle` / `PostHandle` 回调，可用于校验、过滤、轻量 ETL。
+- **LSM 存储路径**：写入进入 MemTable（跳表），经 Bloom 过滤器加速查询，分层 Compaction 顺序落盘成 SSTable。
+- **Raft 写复制**：写命令经 Raft 日志复制后再应用到存储引擎；WAL 采用 **group-commit**，把整批写的 N 次 fsync 摊销为 1 次。崩溃恢复（重启重放日志）与快照均由 Raft 层负责。
+- **交互式客户端**：类 Redis-CLI 的交互模式与一次性命令模式。
 
-1. **Client layer**: builds binary KV payloads and sends them over TCP.
-2. **BanNet network layer**: accepts connections, unpacks messages, dispatches requests to routers, and writes buffered responses.
-3. **Service layer**: maps message IDs to KV operations and coordinates Raft-backed command submission.
-4. **Storage layer**: applies committed commands to the MemTable/WAL/SSTable storage engine.
+---
+
+## 架构
 
 ```mermaid
 flowchart TD
-    Client[Client CLI] -->|TCP binary protocol| BanNet[BanNet network layer]
-    BanNet --> Router[Service router]
-    Router -->|PUT / DELETE| Raft[Raft log]
-    Router -->|GET| KV[KV server]
-    Raft --> FSM[FSM apply loop]
-    FSM --> Engine[Storage engine]
+    Client[客户端 / 采集端] -->|TCP TLV 协议| BanNet[BanNet 网络层]
+    BanNet -->|PreHandle 钩子: 校验/过滤/脱敏| Router[服务路由]
+    Router -->|PUT / DELETE| Raft[Raft 日志复制]
+    Router -->|GET / SCAN| KV[KV 读取]
+    Raft --> FSM[FSM 应用循环]
+    FSM --> Engine[存储引擎]
     KV --> Engine
-    Engine --> MemTable[MemTable]
-    MemTable --> WAL[Write-ahead log]
-    MemTable --> SSTable[SSTable files]
+    Engine --> MemTable[MemTable 跳表]
+    MemTable -->|Flush| SSTable[SSTable 分层文件]
+    MemTable -.Bloom.-> SSTable
 ```
 
-## Project Layout
+- **客户端层**：构造二进制 KV 负载，经 TCP 发送。
+- **BanNet 网络层**：收连接、解帧、跑钩子、派发路由、写回响应。
+- **服务层**：消息 ID → KV 操作，协调 Raft 写提交。
+- **存储层**：把已提交命令应用到 MemTable / SSTable。耐久性由 Raft WAL 提供（存储层自身无 WAL）。
 
-```text
-.
-├── Server/             # TCP KV server entry point and runtime scripts
-├── client/             # Interactive and command-line TCP client
-├── config/             # Runtime configuration
-├── network/            # BanNet TCP framework and interfaces
-├── service/            # KV router, FSM, and HA/Raft coordination
-├── storage/            # Storage engine, MemTable, WAL, and SSTable code
-├── Raft/               # Raft implementation, persistence, snapshots, and tests
-├── benchmark/          # TCP benchmark helpers
-├── grpc_benchmark/     # gRPC benchmark helpers
-├── server_grpc/        # Experimental gRPC server entry point
-└── test_grpc/          # gRPC protocol and test client/server code
-```
+---
 
-## Getting Started
+## 快速启动
 
-### Requirements
-
-- Go `1.26.1` or the version declared in [go.mod](go.mod)
-- Windows, Linux, or macOS
-
-### Start the TCP Server
-
-From the repository root:
+环境：Go 1.26+，Windows / Linux / macOS。
 
 ```powershell
+# 启动服务（默认读 config/config.json，监听 127.0.0.1:8080）
 cd Server
 go run .
-```
 
-By default, the server reads [config/config.json](config/config.json) and listens on `127.0.0.1:8080`.
-
-### Start the Client
-
-Open another terminal from the repository root:
-
-```powershell
+# 另开终端启动客户端
 cd client
 go run .
 ```
 
-Then run commands interactively:
+交互示例：
 
 ```text
-> put name Alice
+> put imu:dev0:20260606120000 {"ax":0.01,"ay":9.8,"az":0.02}
 OK
-> get name
-"Alice"
-> delete name
-OK
+> get imu:dev0:20260606120000
+"{...}"
 > quit
 ```
 
-Command mode is also available:
+---
 
-```powershell
-cd client
-go run . put name Alice
-go run . get name
-go run . delete name
-```
+## 协议
 
-## Client Usage
-
-Supported commands:
-
-| Command | Description | Example |
-| --- | --- | --- |
-| `put <key> <value>` | Store or overwrite a key-value pair | `put name Alice` |
-| `get <key>` | Read a value by key | `get name` |
-| `delete <key>` | Delete a key | `delete name` |
-| `help` | Show interactive help | `help` |
-| `quit` / `exit` | Exit interactive mode | `quit` |
-
-Interactive mode keeps one TCP connection open and supports values that contain spaces.
-
-## Protocol
-
-BanDB uses a framed binary protocol.
-
-Request frame:
+定长帧头的二进制协议：
 
 ```text
 [dataLen: uint32] [msgID: uint32] [payload]
 ```
 
-Message IDs:
-
-| ID | Operation | Payload |
+| msgID | 操作 | 负载 |
 | --- | --- | --- |
 | `1` | PUT | `keyLen:uint32 + valueLen:uint32 + key + value` |
 | `2` | GET | `keyLen:uint32 + key` |
 | `3` | DELETE | `keyLen:uint32 + key` |
 
-Response payloads use a one-byte status flag where `0x00` means success and `0x01` means error. Successful GET responses include `valueLen:uint32 + value` after the status byte.
+响应负载首字节为状态标志（`0x00` 成功 / `0x01` 失败）；GET 成功时其后接 `valueLen:uint32 + value`。
 
-## Configuration
+---
 
-The default configuration lives in [config/config.json](config/config.json):
+## 压测
 
-```json
-{
-  "MaxMemTableSize": 10000,
-  "WALPath": "../../log/wal.log",
-  "SSTablePath": "../../log",
-  "Host": "127.0.0.1",
-  "Port": 8080,
-  "MaxConn": 100,
-  "WorkPoolSize": 100,
-  "MaxMsgChanLen": 100,
-  "MaxCompactionSize": 4,
-  "RaftSnapshotThreshold": 1000
-}
-```
-
-Tune these values for memory pressure, worker concurrency, connection limits, storage paths, and Raft snapshot behavior.
-
-## Testing
-
-Run all Go tests from the repository root:
+`benchmark/ingest/` 提供面向高频摄入的开环压测（饱和相找吞吐天花板 + 定速率相证丢帧/尾延迟/内存）。真实数据与诚实结论见 [`docs-step/M1-ingest-benchmark-result.md`](docs-step/M1-ingest-benchmark-result.md)。
 
 ```powershell
-go test ./...
+go run ./benchmark/ingest/ -sat 0 -d 60s -rates 50000,100000,200000
 ```
 
-Run focused suites:
+---
 
-```powershell
-go test ./storage/...
-go test ./service/...
-go test ./Raft -v
-```
+## 路线图
 
-On Windows, Raft helper scripts are also available:
+**进行中 / 计划**：
+- 写路径**背压**：未刷盘积压超硬上限时阻塞写入，使内存在持续负载下真正有界。
+- **边缘查询**：`scan(start_ts, end_ts) + 谓词` 范围扫描，只打包命中切片上传。
+- 落盘前**真实过滤钩子**示例（丢超时/畸形帧、字段脱敏、时间戳单调校验）。
+- 固定多节点边缘网关模式下，用 Raft 复制采集清单 / 断点等协调元数据。
 
-```powershell
-cd Raft
-.\quick-test.bat
-.\run-tests.bat
-```
-
-## Use Cases
-
-### High-Frequency Log Ingestion
-
-BanDB Flux is a good fit for services that continuously generate large volumes of logs, metrics, or trace-like events. Instead of writing every event directly into a heavier downstream system, applications can write compact key-value records into BanDB first.
-
-For example, a service can use a timestamp-based key and store the raw log payload as the value:
-
-```text
-put log:20260517:service-a:000001 {"level":"INFO","msg":"request accepted","trace_id":"abc"}
-put log:20260517:service-a:000002 {"level":"ERROR","msg":"timeout","trace_id":"def"}
-```
-
-This pattern works well because writes first land in memory through the MemTable and are protected by WAL, while the LSM-style storage path is optimized for sequential write-heavy workloads. The TCP protocol also avoids HTTP overhead on the hot path, making it suitable for high-throughput ingestion agents.
-
-Typical flow:
-
-1. Application or log agent sends log records over the BanDB TCP protocol.
-2. BanNet routes the request and optionally runs validation or filtering hooks.
-3. The write is appended through Raft and applied to the storage engine.
-4. Downstream analytics systems can later consume, replay, or export the stored logs.
-
-### Other Scenarios
-
-- **Write-heavy event buffering**: absorb bursty order, log, or tracking events before downstream analytics systems consume them.
-- **Pre-storage for data warehouses**: keep ingestion lightweight while exporting or replaying data into OLAP systems.
-- **Network-layer ETL**: use routing hooks to validate, normalize, filter, or reject data before it reaches storage.
-- **Embedded KV service**: run as a compact TCP service with minimal runtime dependencies.
-
-## Roadmap
-
-- Broaden multi-node Raft deployment tooling.
-- Add clearer operational scripts for Linux/macOS.
-- Improve SSTable compaction controls and observability.
-- Add protocol compatibility tests for clients.
-- Expand English documentation for design decisions and benchmark results.
+**明确不做**（避免过度承诺）：移动设备间 Multi-Raft 强一致互备、去中心化共识调度、传感器时间同步、把对象存储已有的断点续传 + hash 校验当作自研创新。

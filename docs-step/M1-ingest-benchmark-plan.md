@@ -42,6 +42,22 @@
 
 ---
 
+## 关键发现：耐久性在 Raft 层，不在存储层（决定指标归属）
+
+读代码确认：commit `删除未接入写路径的 storage WAL` 之后，**存储引擎层已无 WAL**。MemTable 数据仅在 flush 成 SSTable 后落盘，未 flush 的 MemTable 数据**易失**。真正的崩溃恢复在 **Raft 层**（`Raft/raft_wal.go` group-commit fsync + 重启 `LoadLogs` 重放 → `service/fsm.go` 应用到引擎）。
+
+因此五个指标**按层归属**，不混淆：
+
+| 指标 | A1 引擎内 | A2 全链路(Raft) |
+|---|---|---|
+| 写吞吐 | ✅ | ✅ |
+| p99 写延迟 | ✅ | ✅ |
+| 内存峰值（封顶下不无限涨） | ✅（同进程 MemStats） | △（服务端，难干净测） |
+| 定速率 0 丢帧 | ✅ | ✅ |
+| **WAL 重启可恢复（崩溃 0 丢失）** | ❌ 引擎无 WAL，做不到 | ✅ **只能这里证** |
+
+A1 明确打印 `Durability: N/A at engine layer (no storage WAL — see A2)`，不含糊其辞。
+
 ## 已定的默认（无需你决策，除非你想改）
 
 - **IMU 数据形状**：key = `imu:<dev>:<ts_nanos>`（约 24B，时间戳前缀 → 顺序写 + 天然 range scan）；value = 64B（accel/gyro/mag 9×float32 + 头）。

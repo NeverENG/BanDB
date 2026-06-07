@@ -188,13 +188,16 @@ func TestConfigInitWithFile(t *testing.T) {
 func TestPeerValidation(t *testing.T) {
 	testCases := []struct {
 		name    string
+		mode    string
 		peers   []string
 		me      int
 		wantErr bool
 	}{
-		{"valid single node", []string{"localhost:8080"}, 0, false},
-		{"valid multi node", []string{"localhost:8080", "localhost:8081", "localhost:8082"}, 1, false},
-		{"invalid out of range", []string{"localhost:8080"}, 1, true},
+		{"valid single node", ModeRaft, []string{"localhost:8080"}, 0, false},
+		{"valid multi node", ModeRaft, []string{"localhost:8080", "localhost:8081", "localhost:8082"}, 1, false},
+		{"invalid out of range", ModeRaft, []string{"localhost:8080"}, 1, true},
+		// standalone 不启动 Raft，越界的 Me 不再触发校验
+		{"standalone skips validation", ModeStandalone, []string{"localhost:8080"}, 1, false},
 	}
 
 	for _, tc := range testCases {
@@ -205,6 +208,7 @@ func TestPeerValidation(t *testing.T) {
 			os.Args = []string{"test", "-me", strconv.Itoa(tc.me)}
 
 			g := &GlobalConfig{
+				Mode:  tc.mode,
 				Peers: tc.peers,
 			}
 

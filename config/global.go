@@ -12,6 +12,12 @@ import (
 	"github.com/NeverENG/BanDB/network/banIface"
 )
 
+// 运行模式取值
+const (
+	ModeStandalone = "standalone" // 单机：写经存储层 WAL，不启动 Raft
+	ModeRaft       = "raft"       // 集群：写经 Raft 日志
+)
+
 type GlobalConfig struct {
 	Name    string
 	Port    int
@@ -37,6 +43,10 @@ type GlobalConfig struct {
 
 	MaxMemTableP     float64
 	MaxMemTableLevel int
+
+	// Mode 运行模式："standalone"（单机 WAL，不启动 Raft）或 "raft"（集群，写经 Raft 日志）。
+	// 留空时按 len(Peers) 推断：1→standalone，>1→raft。
+	Mode string
 
 	// Raft 集群配置
 	Peers []string // 集群中所有节点的地址
@@ -162,13 +172,38 @@ func (g *GlobalConfig) ParseFlags() {
 		}
 	}
 
+	g.resolveMode()
+
+	// standalone 不启动 Raft，无需 Me/Peers 校验
+	if g.Mode == ModeStandalone {
+		slog.Info("config finalized", "mode", g.Mode)
+		return
+	}
+
 	// 验证配置
 	if g.Me < 0 || g.Me >= len(g.Peers) {
 		slog.Error("invalid me value", "me", g.Me, "peers_len", len(g.Peers))
 		panic("invalid me value")
 	}
 
-	slog.Info("config finalized", "peers", g.Peers, "me", g.Me)
+	slog.Info("config finalized", "mode", g.Mode, "peers", g.Peers, "me", g.Me)
+}
+
+// resolveMode 归一化运行模式：显式取值优先，留空时按 Peers 数量推断。
+func (g *GlobalConfig) resolveMode() {
+	switch g.Mode {
+	case ModeStandalone, ModeRaft:
+		// 显式指定，尊重之
+	case "":
+		if len(g.Peers) > 1 {
+			g.Mode = ModeRaft
+		} else {
+			g.Mode = ModeStandalone
+		}
+	default:
+		slog.Error("invalid mode", "mode", g.Mode)
+		panic("invalid mode: " + g.Mode)
+	}
 }
 
 func meFlagArgs(args []string) []string {

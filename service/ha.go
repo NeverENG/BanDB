@@ -38,10 +38,12 @@ func (h *HA) healthCheckLoop() {
 
 // checkHealth 检查健康状态
 func (h *HA) checkHealth() {
-	// 检查 Raft 状态
-	state, _ := h.kv.GetRaft().GetState()
-	if state == 0 { // Follower
-		// 可以添加更多健康检查逻辑
+	// 检查 Raft 状态（standalone 模式无 Raft，直接视为健康）
+	if raft := h.kv.GetRaft(); raft != nil {
+		state, _ := raft.GetState()
+		if state == 0 { // Follower
+			// 可以添加更多健康检查逻辑
+		}
 	}
 
 	// 简单的健康检查：只要 Raft 状态不是错误状态，就认为是健康的

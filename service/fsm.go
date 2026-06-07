@@ -22,35 +22,91 @@ type Command struct {
 type KVServer struct {
 	raft    *Raft.Raft
 	storage *storage.Engine
+	wal     *storage.WAL // standalone 模式的存储层 WAL；raft 模式为 nil
 }
 
-// NewFSM 创建 FSM，自动从全局配置初始化 Raft 和存储
+// NewFSM 创建 FSM，按运行模式初始化存储与持久化路径。
+// standalone：构建存储层 WAL 并重放到 memtable，不启动 Raft。
+// raft：启动 Raft，写经其日志，不使用存储层 WAL。
 func NewKVServer() *KVServer {
-	// 从全局配置获取集群信息
-	peers := config.G.Peers
-	me := config.G.Me
-
-	// 初始化 Raft
-	raft := Raft.NewRaft(peers, me)
-
 	// 初始化存储
 	memTable := zstorage.NewMemTable()
 	store := storage.NewEngine(memTable)
 
-	KVServer := &KVServer{
-		raft:    raft,
+	kv := &KVServer{
 		storage: store,
 	}
 
-	return KVServer
+	if config.G.Mode == config.ModeStandalone {
+		wal, err := storage.NewWAL(config.G.WALPath)
+		if err != nil {
+			slog.Error("failed to open storage WAL", "path", config.G.WALPath, "error", err)
+			panic("failed to open storage WAL: " + err.Error())
+		}
+		kv.wal = wal
+		kv.replayWAL()
+		return kv
+	}
+
+	// raft 模式：写经 Raft 日志
+	kv.raft = Raft.NewRaft(config.G.Peers, config.G.Me)
+	return kv
 }
 
-// Run 运行 FSM
+// replayWAL 启动时把 WAL 中的记录重放进 memtable（幂等盲写）。
+func (k *KVServer) replayWAL() {
+	if err := k.wal.Replay(func(op uint8, key, value []byte) error {
+		switch op {
+		case storage.WALOpPut:
+			return k.storage.Put(key, value)
+		case storage.WALOpDelete:
+			return k.storage.Delete(key)
+		}
+		return nil
+	}); err != nil {
+		slog.Error("WAL replay failed", "error", err)
+	}
+}
+
+// Run 运行 FSM。standalone 模式下写已在 Write 中直接落 WAL+存储，无需 apply 循环。
 func (k *KVServer) Run() {
+	if k.raft == nil {
+		slog.Info("KVServer started in standalone mode (no Raft apply loop)")
+		return
+	}
 	slog.Info("KVServer started, waiting for Raft entries")
 	for entry := range k.raft.GetApplyCh() {
 		k.Apply(entry)
 	}
+}
+
+// Write 统一写入入口：standalone 直接落 WAL+存储；raft 经日志提交后由 apply 循环落盘。
+func (k *KVServer) Write(cmd Command) error {
+	if k.raft == nil {
+		return k.writeStandalone(cmd)
+	}
+	index, err := k.AppendEntry(cmd)
+	if err != nil {
+		return err
+	}
+	return k.WaitForCommit(index)
+}
+
+// writeStandalone 先 append+fsync WAL，再写 memtable，提供单机崩溃恢复。
+func (k *KVServer) writeStandalone(cmd Command) error {
+	switch cmd.Type {
+	case "Put":
+		if err := k.wal.Append(storage.WALOpPut, cmd.Key, cmd.Value); err != nil {
+			return err
+		}
+		return k.storage.Put(cmd.Key, cmd.Value)
+	case "Delete":
+		if err := k.wal.Append(storage.WALOpDelete, cmd.Key, nil); err != nil {
+			return err
+		}
+		return k.storage.Delete(cmd.Key)
+	}
+	return nil
 }
 
 // Apply 应用日志到存储
@@ -156,6 +212,9 @@ func (k *KVServer) WaitForCommit(index int) error {
 // 成为 Leader，且其端口需立即开放以提供本地读；多节点选主窗口内的写失败需由客户端
 // 重试关闭，超出本修复范围。
 func (k *KVServer) WaitUntilReady() {
+	if k.raft == nil {
+		return // standalone：无选主，端口可立即开放
+	}
 	if len(config.G.Peers) != 1 {
 		return
 	}

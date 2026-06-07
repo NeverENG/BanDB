@@ -1,4 +1,5 @@
 {
+  "Mode": "standalone",
   "MaxMemTableSize": 10000,
   "WALPath": "../../log/wal.log",
   "SSTablePath": "../../log",

@@ -2,6 +2,7 @@ package service
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,10 +15,13 @@ func setupTest(t *testing.T) (*KVServer, func()) {
 	oldMaxSize := config.G.MaxMemTableSize
 	oldPeers := config.G.Peers
 	oldMe := config.G.Me
+	oldMode := config.G.Mode
 
 	// 每个测试用唯一的文件名，避免测试间干扰
 	testWALPath := "test_service_wal_" + time.Now().Format("20060102150405.000000") + ".log"
 
+	// 这些测试覆盖 Raft FSM 路径（Apply/AppendEntry/WaitUntilReady），固定 raft 模式
+	config.G.Mode = config.ModeRaft
 	config.G.WALPath = testWALPath
 	config.G.MaxMemTableSize = 100
 	config.G.Peers = []string{"localhost:9000"}
@@ -35,6 +39,7 @@ func setupTest(t *testing.T) (*KVServer, func()) {
 		config.G.MaxMemTableSize = oldMaxSize
 		config.G.Peers = oldPeers
 		config.G.Me = oldMe
+		config.G.Mode = oldMode
 	}
 
 	return fsm, cleanup
@@ -140,6 +145,53 @@ func TestFSM_UpdateOperation(t *testing.T) {
 	val, _ := fsm.Get([]byte("key1"))
 	if string(val) != "value2" {
 		t.Errorf("Expected 'value2', got '%s'", string(val))
+	}
+}
+
+// TestStandalone_WriteAndRecover 验证 standalone 模式：写经 WAL+存储且不启动 Raft，
+// 重启后新实例能从同一 WAL 重放恢复（含删除墓碑）。
+func TestStandalone_WriteAndRecover(t *testing.T) {
+	oldWALPath := config.G.WALPath
+	oldSSTablePath := config.G.SSTablePath
+	oldMode := config.G.Mode
+	oldMaxSize := config.G.MaxMemTableSize
+
+	dir := t.TempDir()
+	config.G.Mode = config.ModeStandalone
+	config.G.WALPath = filepath.Join(dir, "wal.log")
+	config.G.SSTablePath = dir
+	config.G.MaxMemTableSize = 1 << 20 // 足够大，避免本测试触发刷盘
+	defer func() {
+		config.G.WALPath = oldWALPath
+		config.G.SSTablePath = oldSSTablePath
+		config.G.Mode = oldMode
+		config.G.MaxMemTableSize = oldMaxSize
+	}()
+
+	kv := NewKVServer()
+	if kv.raft != nil {
+		t.Fatal("standalone mode must not start Raft")
+	}
+	for _, c := range []Command{
+		{Type: "Put", Key: []byte("k1"), Value: []byte("v1")},
+		{Type: "Put", Key: []byte("k2"), Value: []byte("v2")},
+		{Type: "Delete", Key: []byte("k1")},
+	} {
+		if err := kv.Write(c); err != nil {
+			t.Fatalf("write %+v: %v", c, err)
+		}
+	}
+	_ = kv.wal.Close()
+
+	// 模拟重启：新实例从同一 WAL 恢复
+	kv2 := NewKVServer()
+	defer kv2.wal.Close()
+
+	if v, err := kv2.Get([]byte("k2")); err != nil || string(v) != "v2" {
+		t.Fatalf("recover k2: v=%q err=%v", v, err)
+	}
+	if _, err := kv2.Get([]byte("k1")); err == nil {
+		t.Fatal("k1 should remain deleted after recovery")
 	}
 }
 

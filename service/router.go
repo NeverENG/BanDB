@@ -100,15 +100,8 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 		Value: value,
 	}
 
-	index, err := r.kv.AppendEntry(cmd)
-	if err != nil {
-		slog.Error("[ERROR] handlePut: AppendEntry failed", "error", err)
-		sendErr(request)
-		return
-	}
-
-	if err := r.kv.WaitForCommit(index); err != nil {
-		slog.Error("[ERROR] handlePut: WaitForCommit failed", "error", err)
+	if err := r.kv.Write(cmd); err != nil {
+		slog.Error("[ERROR] handlePut: write failed", "error", err)
 		sendErr(request)
 		return
 	}
@@ -166,13 +159,7 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 		Key:  key,
 	}
 
-	index, err := r.kv.AppendEntry(cmd)
-	if err != nil {
-		sendErr(request)
-		return
-	}
-
-	if err := r.kv.WaitForCommit(index); err != nil {
+	if err := r.kv.Write(cmd); err != nil {
 		sendErr(request)
 		return
 	}

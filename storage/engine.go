@@ -41,6 +41,12 @@ func (e *Engine) Delete(key []byte) error {
 	return e.memTable.Delete(key)
 }
 
+// Scan 在 [start,end] 闭区间升序遍历最新可见键值，跳过墓碑；fn 返回 false 提前停止。
+// 当前仅覆盖 MemTable（未刷盘热数据），已刷盘到 SSTable 的历史数据待后续接入。
+func (e *Engine) Scan(start, end []byte, fn func(key, value []byte) bool) {
+	e.memTable.ScanRange(start, end, fn)
+}
+
 func (e *Engine) Apply(cmd StorageCommand) error {
 	e.applyCh <- cmd
 	return nil

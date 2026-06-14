@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/NeverENG/BanDB/network/banNet"
+	"github.com/NeverENG/BanDB/pkg/metrics"
 	"github.com/NeverENG/BanDB/pkg/proto"
 	"github.com/NeverENG/BanDB/service"
 	"github.com/NeverENG/BanDB/service/ingesthook"
@@ -38,6 +41,9 @@ func main() {
 	// 注册连接生命周期回调
 	server.SetConnStartFunc(router.OnConnStart)
 	server.SetConnStopFunc(router.OnConnStop)
+
+	// 启动周期性指标快照：headless 边缘设备 tail 日志即可观测运行状态
+	metrics.StartLogger(context.Background(), 10*time.Second)
 
 	// 启动服务
 	fmt.Println("Starting Server...")

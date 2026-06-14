@@ -10,6 +10,7 @@ import (
 
 	"github.com/NeverENG/BanDB/config"
 	"github.com/NeverENG/BanDB/pkg/credit"
+	"github.com/NeverENG/BanDB/pkg/metrics"
 	"github.com/NeverENG/BanDB/storage/istorage"
 )
 
@@ -70,6 +71,9 @@ func NewMemTable() *MemTable {
 		sst:       NewSSTable(),
 		credits:   credit.New(config.G.MemTableMaxInflightBytes),
 	}
+	// 注册未刷盘字节数仪表，供周期性指标快照实时读取。
+	metrics.SetMemTableGauges(mt.InflightBytes, config.G.MemTableMaxInflightBytes)
+
 	go mt.FlushWorker()
 	go mt.ListenCompactCh()
 
@@ -191,7 +195,8 @@ func (m *MemTable) acquireCredit(n int64) {
 	if m.credits.TryAcquire(n) {
 		return
 	}
-	m.StartFlush() // 确保有 flush 在路上来归还信用，避免永久阻塞
+	metrics.BackpressureStalls.Add(1) // 快路径未命中，将触发刷盘并阻塞等待信用
+	m.StartFlush()                     // 确保有 flush 在路上来归还信用，避免永久阻塞
 	m.credits.Acquire(n)
 }
 

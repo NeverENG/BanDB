@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/NeverENG/BanDB/network/banIface"
+	"github.com/NeverENG/BanDB/pkg/metrics"
 	"github.com/NeverENG/BanDB/pkg/proto"
 )
 
@@ -54,10 +55,12 @@ func (f *Filter) Handle(req banIface.IRequest) banIface.HookAction {
 
 	key, value, ok := parsePut(req.GetMsgData())
 	if !ok {
+		metrics.FramesDroppedMalformed.Add(1)
 		return banIface.HookDrop // 畸形帧：长度字段与实际数据不符
 	}
 
 	if f.maxValueLen > 0 && len(value) > f.maxValueLen {
+		metrics.FramesDroppedOversized.Add(1)
 		return banIface.HookDrop // 畸形帧：value 超过上限
 	}
 
@@ -70,6 +73,7 @@ func (f *Filter) Handle(req banIface.IRequest) banIface.HookAction {
 			last, seen := f.lastTS[device]
 			if seen && ts <= last {
 				f.mu.Unlock()
+				metrics.FramesDroppedNonMonotonic.Add(1)
 				return banIface.HookDrop // 回退/重放帧
 			}
 			f.lastTS[device] = ts

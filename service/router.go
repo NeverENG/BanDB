@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/NeverENG/BanDB/network/banIface"
+	"github.com/NeverENG/BanDB/pkg/metrics"
 	"github.com/NeverENG/BanDB/pkg/proto"
 )
 
@@ -113,10 +114,12 @@ func (r *Router) handlePut(data []byte, request banIface.IRequest) {
 
 	if err := r.kv.Write(cmd); err != nil {
 		slog.Error("[ERROR] handlePut: write failed", "error", err)
+		metrics.WriteErrors.Add(1)
 		sendErr(request)
 		return
 	}
 
+	metrics.Writes.Add(1)
 	sendOK(request)
 }
 
@@ -134,6 +137,7 @@ func (r *Router) handleGet(data []byte, request banIface.IRequest) {
 
 	key := data[4 : 4+keyLen]
 
+	metrics.Reads.Add(1)
 	value, err := r.kv.Get(key)
 	if err != nil {
 		sendErr(request)
@@ -171,10 +175,12 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 	}
 
 	if err := r.kv.Write(cmd); err != nil {
+		metrics.WriteErrors.Add(1)
 		sendErr(request)
 		return
 	}
 
+	metrics.Deletes.Add(1)
 	sendOK(request)
 }
 

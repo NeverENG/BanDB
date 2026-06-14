@@ -37,6 +37,7 @@ func main() {
 	server.AddRouter(proto.MsgPut, router)
 	server.AddRouter(proto.MsgGet, router)
 	server.AddRouter(proto.MsgDelete, router)
+	server.AddRouter(proto.MsgScan, router)
 
 	// 注册连接生命周期回调
 	server.SetConnStartFunc(router.OnConnStart)

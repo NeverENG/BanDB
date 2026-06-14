@@ -13,6 +13,7 @@ const (
 	MsgPut     = "PUT"
 	MsgGet     = "GET"
 	MsgDelete  = "DEL"
+	MsgScan    = "SCAN"
 	MsgRespOK  = "OK"
 	MsgRespErr = "ERR"
 	MsgHello   = "HELLO"

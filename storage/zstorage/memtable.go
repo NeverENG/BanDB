@@ -148,6 +148,66 @@ func (m *MemTable) Get(key []byte) ([]byte, error) {
 	return nil, errors.New("Key not found")
 }
 
+// firstGTE 返回第一个 Key >= key 的节点；key 为空表示从头开始。无则返回 nil。
+func (sl *SkipList) firstGTE(key []byte) *SkipNode {
+	p := sl.head
+	if p == nil {
+		return nil
+	}
+	for i := sl.level - 1; i >= 0; i-- {
+		for p.Next[i] != nil && bytes.Compare(p.Next[i].Key, key) < 0 {
+			p = p.Next[i]
+		}
+	}
+	return p.Next[0]
+}
+
+// ScanRange 在 [start,end] 闭区间内升序遍历 active+dirty 合并后的最新可见键值，
+// 跳过墓碑(value==nil)，对每条命中调用 fn；fn 返回 false 可提前停止。
+// start/end 为空分别表示下界/上界不限。
+//
+// 全程持读锁：热窗口范围扫描有界且短，期间写入与刷盘会等待。fn 内若需在调用
+// 返回后继续持有 key/value，应自行拷贝——底层切片归 MemTable 所有。
+func (m *MemTable) ScanRange(start, end []byte, fn func(key, value []byte) bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var a, d *SkipNode
+	if m.active != nil {
+		a = m.active.firstGTE(start)
+	}
+	if m.dirty != nil {
+		d = m.dirty.firstGTE(start)
+	}
+
+	for a != nil || d != nil {
+		// 选更小的 key；相等时 active 为最新版本，用 active 值并同步推进 dirty。
+		var key, val []byte
+		switch {
+		case d == nil || (a != nil && bytes.Compare(a.Key, d.Key) < 0):
+			key, val = a.Key, a.Value
+			a = a.Next[0]
+		case a == nil || bytes.Compare(d.Key, a.Key) < 0:
+			key, val = d.Key, d.Value
+			d = d.Next[0]
+		default: // a.Key == d.Key：active 覆盖 dirty
+			key, val = a.Key, a.Value
+			a = a.Next[0]
+			d = d.Next[0]
+		}
+
+		if len(end) > 0 && bytes.Compare(key, end) > 0 {
+			return // 升序遍历已越过上界，可停
+		}
+		if val == nil {
+			continue // 墓碑：跳过
+		}
+		if !fn(key, val) {
+			return
+		}
+	}
+}
+
 // search 在跳表中查找指定 key，返回值和是否找到
 func (sl *SkipList) search(key []byte) ([]byte, bool) {
 	p := sl.head

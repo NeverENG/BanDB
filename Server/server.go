@@ -6,6 +6,7 @@ import (
 	"github.com/NeverENG/BanDB/network/banNet"
 	"github.com/NeverENG/BanDB/pkg/proto"
 	"github.com/NeverENG/BanDB/service"
+	"github.com/NeverENG/BanDB/service/ingesthook"
 )
 
 func main() {
@@ -23,6 +24,11 @@ func main() {
 
 	// 创建路由
 	router := service.NewRouter(KVServer)
+
+	// 挂载采集入口过滤钩子：落盘前丢弃畸形帧、按设备做 best-effort 时间戳
+	// 单调校验、对敏感字段脱敏。
+	filter := ingesthook.NewFilter([]string{"gps", "user_id"}, 0, true)
+	router.SetPreHandle(filter.Handle)
 
 	// 注册路由
 	server.AddRouter(proto.MsgPut, router)

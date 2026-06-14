@@ -100,7 +100,7 @@ func NewGlobalConfig() *GlobalConfig {
 		Host:                     "localhost",
 		Version:                  "1.0.0",
 		MaxConn:                  1000,
-		MaxPackageSize:           1024,
+		MaxPackageSize:           16 << 20, // 16MiB：容纳多模态大值(相机帧)与多条 SCAN 响应
 		WorkerPoolSize:           10,
 		MaxWorkerTaskLen:         10000,
 		MaxMsgChanLen:            100,

@@ -111,7 +111,7 @@ func TestDefaultConfigValues(t *testing.T) {
 		value interface{}
 	}{
 		{"Version", "1.0.0"},
-		{"MaxPackageSize", uint32(1024)},
+		{"MaxPackageSize", uint32(16 << 20)},
 		{"WorkerPoolSize", uint32(10)},
 		{"MaxWorkerTaskLen", uint32(10000)},
 		{"MaxMsgChanLen", uint32(100)},

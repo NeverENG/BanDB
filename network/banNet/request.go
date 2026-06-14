@@ -19,6 +19,12 @@ func (req *Request) GetMsgData() []byte {
 	return req.msg.GetData()
 }
 
+// SetMsgData 改写负载并同步长度，避免 DataLen 与实际数据漂移。
+func (req *Request) SetMsgData(data []byte) {
+	req.msg.SetData(data)
+	req.msg.SetMsgLen(uint32(len(data)))
+}
+
 func (req *Request) GetMsgID() string {
 	return req.msg.GetMsgID()
 }

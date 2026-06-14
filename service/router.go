@@ -12,8 +12,8 @@ import (
 type Router struct {
 	kv *KVServer
 
-	// 前置处理函数
-	preHandleFunc func(request banIface.IRequest)
+	// 前置处理函数；返回 HookDrop 表示丢弃本帧
+	preHandleFunc func(request banIface.IRequest) banIface.HookAction
 	// 后置处理函数
 	postHandleFunc func(request banIface.IRequest)
 }
@@ -26,7 +26,7 @@ func NewRouter(kv *KVServer) *Router {
 }
 
 // SetPreHandle 设置前置处理函数
-func (r *Router) SetPreHandle(f func(request banIface.IRequest)) {
+func (r *Router) SetPreHandle(f func(request banIface.IRequest) banIface.HookAction) {
 	r.preHandleFunc = f
 }
 
@@ -35,11 +35,17 @@ func (r *Router) SetPostHandle(f func(request banIface.IRequest)) {
 	r.postHandleFunc = f
 }
 
-// PreHandle 前置处理
-func (r *Router) PreHandle(request banIface.IRequest) {
-	if r.preHandleFunc != nil {
-		r.preHandleFunc(request)
+// PreHandle 前置处理。返回 HookDrop 时由本函数回写唯一的「丢弃」响应，
+// 使纯请求-响应协议不发生响应错位（见 OnConnStart 注释）。
+func (r *Router) PreHandle(request banIface.IRequest) banIface.HookAction {
+	if r.preHandleFunc == nil {
+		return banIface.HookPass
 	}
+	action := r.preHandleFunc(request)
+	if action == banIface.HookDrop {
+		sendDropped(request)
+	}
+	return action
 }
 
 // Handle 处理请求
@@ -73,6 +79,11 @@ func sendErr(req banIface.IRequest) {
 // sendOK 写回 PUT/DEL 成功响应
 func sendOK(req banIface.IRequest) {
 	req.GetConnection().SendBuffMsg(proto.MsgRespOK, statusPayload(proto.StatusOK))
+}
+
+// sendDropped 写回「被钩子按策略丢弃」响应；保证每请求恰好一个响应。
+func sendDropped(req banIface.IRequest) {
+	req.GetConnection().SendBuffMsg(proto.MsgRespErr, statusPayload(proto.StatusDropped))
 }
 
 // handlePut 处理 PUT 操作

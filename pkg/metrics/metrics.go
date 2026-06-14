@@ -1,0 +1,115 @@
+// Package metrics 提供零依赖的进程内可观测性：一组原子计数器 + 仪表回调，
+// 以「周期性 slog 快照」作为暴露出口——headless 边缘设备直接 tail 日志即可观测，
+// 无需开端口、无需 Prometheus/Grafana 等外部基础设施。
+//
+// 设计上把「埋点」与「暴露」解耦：业务代码只管在此处累加计数，未来若要再接
+// HTTP /metrics 或 Prometheus 出口，只需新增读取出口，无需改动任何埋点。
+package metrics
+
+import (
+	"context"
+	"log/slog"
+	"sync/atomic"
+	"time"
+)
+
+// 计数器：单调递增的累计量。各业务路径直接 .Add(1)。
+var (
+	FramesDroppedMalformed    atomic.Int64 // 被钩子按「畸形帧」丢弃
+	FramesDroppedOversized    atomic.Int64 // 被钩子按「value 超限」丢弃
+	FramesDroppedNonMonotonic atomic.Int64 // 被钩子按「时间戳回退/重放」丢弃
+	Writes                    atomic.Int64 // 成功写入（PUT）次数
+	Reads                     atomic.Int64 // 读取（GET）次数
+	Deletes                   atomic.Int64 // 成功删除（DEL）次数
+	WriteErrors               atomic.Int64 // 写入/删除失败次数
+	BackpressureStalls        atomic.Int64 // 写入被字节信用背压阻塞的次数
+)
+
+// 仪表：当前瞬时值，由持有者注册回调，快照时实时读取。
+var (
+	memTableInflightFn atomic.Value // 存 func() int64
+	memTableBudget     atomic.Int64
+)
+
+// SetMemTableGauges 注册 MemTable 未刷盘字节数的实时读取回调与字节预算。
+// 通常在 MemTable 构造时调用一次。
+func SetMemTableGauges(inflight func() int64, budget int64) {
+	if inflight != nil {
+		memTableInflightFn.Store(inflight)
+	}
+	memTableBudget.Store(budget)
+}
+
+func memTableInflight() int64 {
+	if f, ok := memTableInflightFn.Load().(func() int64); ok {
+		return f()
+	}
+	return 0
+}
+
+// Snapshot 是某一时刻全部指标的取值。
+type Snapshot struct {
+	DroppedMalformed      int64
+	DroppedOversized      int64
+	DroppedNonMonotonic   int64
+	Writes                int64
+	Reads                 int64
+	Deletes               int64
+	WriteErrors           int64
+	BackpressureStalls    int64
+	MemTableInflightBytes int64
+	MemTableBudgetBytes   int64
+}
+
+// Take 读取当前各指标，组成一份快照。
+func Take() Snapshot {
+	return Snapshot{
+		DroppedMalformed:      FramesDroppedMalformed.Load(),
+		DroppedOversized:      FramesDroppedOversized.Load(),
+		DroppedNonMonotonic:   FramesDroppedNonMonotonic.Load(),
+		Writes:                Writes.Load(),
+		Reads:                 Reads.Load(),
+		Deletes:               Deletes.Load(),
+		WriteErrors:           WriteErrors.Load(),
+		BackpressureStalls:    BackpressureStalls.Load(),
+		MemTableInflightBytes: memTableInflight(),
+		MemTableBudgetBytes:   memTableBudget.Load(),
+	}
+}
+
+// LogSnapshot 用默认 slog logger 打印一行指标快照。
+func LogSnapshot() {
+	s := Take()
+	slog.Info("metrics",
+		"dropped_malformed", s.DroppedMalformed,
+		"dropped_oversized", s.DroppedOversized,
+		"dropped_non_monotonic", s.DroppedNonMonotonic,
+		"writes", s.Writes,
+		"reads", s.Reads,
+		"deletes", s.Deletes,
+		"write_errors", s.WriteErrors,
+		"backpressure_stalls", s.BackpressureStalls,
+		"memtable_inflight_bytes", s.MemTableInflightBytes,
+		"memtable_budget_bytes", s.MemTableBudgetBytes,
+	)
+}
+
+// StartLogger 启动后台 goroutine，每隔 interval 打印一次指标快照，
+// 直到 ctx 取消。interval<=0 时不启动。
+func StartLogger(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				LogSnapshot()
+			}
+		}
+	}()
+}

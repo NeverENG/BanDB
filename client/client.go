@@ -132,6 +132,29 @@ func (c *Client) SendDelete(key []byte) error {
 	return nil
 }
 
+// SendScan 发送 SCAN 范围查询，返回命中条目。
+func (c *Client) SendScan(req proto.ScanRequest) ([]proto.ScanEntry, error) {
+	msg := utils.NewMessage2(proto.MsgScan, proto.EncodeScanRequest(req))
+
+	if err := c.send(msg); err != nil {
+		return nil, fmt.Errorf("failed to send SCAN request: %v", err)
+	}
+
+	_, payload, err := c.readResponse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %v", err)
+	}
+
+	status, entries, err := proto.DecodeScanResponse(payload)
+	if err != nil {
+		return nil, err
+	}
+	if status != proto.StatusOK {
+		return nil, fmt.Errorf("server error")
+	}
+	return entries, nil
+}
+
 // send 打包并写出一条消息
 func (c *Client) send(msg *utils.Message) error {
 	dp := banNet.NewDataPack()

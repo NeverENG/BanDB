@@ -91,9 +91,11 @@ func (g *GlobalConfig) Init() {
 	slog.Info("config initialized")
 }
 
-func NewGlobalConfig() *GlobalConfig {
+// defaultGlobalConfig 返回纯代码默认值，不读取配置文件、不解析命令行。
+// NewGlobalConfig 在其上叠加 Init()(文件覆盖) 与 ParseFlags()(命令行覆盖)。
+func defaultGlobalConfig() *GlobalConfig {
 	logDir := defaultLogDir()
-	global := &GlobalConfig{
+	return &GlobalConfig{
 
 		Name:                     "Raft",
 		Port:                     8080,
@@ -116,6 +118,10 @@ func NewGlobalConfig() *GlobalConfig {
 		RaftSnapshotThreshold:    1000,                       // 默认快照阈值
 		RaftSnapshotKeepEntries:  100,                        // 默认保留条目数
 	}
+}
+
+func NewGlobalConfig() *GlobalConfig {
+	global := defaultGlobalConfig()
 	global.Init()
 	global.ParseFlags()
 	return global

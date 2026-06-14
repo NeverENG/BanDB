@@ -104,7 +104,9 @@ func TestParseFlagsPriority(t *testing.T) {
 }
 
 func TestDefaultConfigValues(t *testing.T) {
-	g := NewGlobalConfig()
+	// 测纯代码默认值：用 defaultGlobalConfig() 而非 NewGlobalConfig()，
+	// 后者会被 config.json 覆盖，使本测试依赖文件是否存在/内容（非 hermetic）。
+	g := defaultGlobalConfig()
 
 	expectedDefaults := []struct {
 		name  string

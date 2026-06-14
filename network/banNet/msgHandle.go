@@ -37,7 +37,9 @@ func (m *MsgHandle) DoMsgHandle(request banIface.IRequest) {
 		fmt.Println("[ERROR] unregistered MsgID:", request.GetMsgID())
 		return
 	}
-	handler.PreHandle(request)
+	if handler.PreHandle(request) == banIface.HookDrop {
+		return
+	}
 	handler.Handle(request)
 	handler.PostHandle(request)
 }

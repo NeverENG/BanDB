@@ -21,6 +21,7 @@ const (
 
 // 响应负载内的状态字段。
 const (
-	StatusOK    = "ok"
-	StatusError = "error"
+	StatusOK      = "ok"
+	StatusError   = "error"
+	StatusDropped = "dropped" // 被 PreHandle 钩子按策略丢弃，非传输错误
 )

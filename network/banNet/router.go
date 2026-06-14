@@ -8,7 +8,7 @@ type BaseRouter struct{}
 
 var _ banIface.IRouter = &BaseRouter{}
 
-func (B *BaseRouter) PreHandle(req banIface.IRequest) {}
+func (B *BaseRouter) PreHandle(req banIface.IRequest) banIface.HookAction { return banIface.HookPass }
 
 func (B *BaseRouter) Handle(req banIface.IRequest) {}
 

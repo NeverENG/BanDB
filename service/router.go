@@ -61,6 +61,8 @@ func (r *Router) Handle(request banIface.IRequest) {
 		r.handleGet(data, request)
 	case proto.MsgDelete:
 		r.handleDelete(data, request)
+	case proto.MsgScan:
+		r.handleScan(data, request)
 	}
 }
 
@@ -182,6 +184,20 @@ func (r *Router) handleDelete(data []byte, request banIface.IRequest) {
 
 	metrics.Deletes.Add(1)
 	sendOK(request)
+}
+
+// handleScan 处理 SCAN 边缘范围查询：解码范围+谓词，服务端筛选后只回传命中切片。
+func (r *Router) handleScan(data []byte, request banIface.IRequest) {
+	req, err := proto.DecodeScanRequest(data)
+	if err != nil {
+		slog.Warn("[WARN] handleScan: decode failed", "error", err)
+		sendErr(request)
+		return
+	}
+
+	metrics.Scans.Add(1)
+	entries := r.kv.Scan(req.Start, req.End, req.Pred)
+	request.GetConnection().SendBuffMsg(proto.MsgRespOK, proto.EncodeScanResponse(proto.StatusOK, entries))
 }
 
 // PostHandle 后置处理

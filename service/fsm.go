@@ -8,6 +8,8 @@ import (
 
 	"github.com/NeverENG/BanDB/Raft"
 	"github.com/NeverENG/BanDB/config"
+	"github.com/NeverENG/BanDB/pkg/predicate"
+	"github.com/NeverENG/BanDB/pkg/proto"
 	"github.com/NeverENG/BanDB/storage"
 	"github.com/NeverENG/BanDB/storage/istorage"
 	"github.com/NeverENG/BanDB/storage/zstorage"
@@ -166,6 +168,31 @@ func (k *KVServer) Get(key []byte) ([]byte, error) {
 		return nil, errors.New("key not found")
 	}
 	return value, err
+}
+
+// maxScanResults 限制单次扫描返回条目数，防止无谓词大范围扫描撑爆内存。
+const maxScanResults = 10000
+
+// Scan 在 [start,end] 闭区间扫描 MemTable 热数据，对满足谓词的条目收集 key/value
+// 拷贝后返回（只回传命中切片）。底层切片归 MemTable 所有，故必须拷贝。
+// 达到上限时截断并告警。
+func (k *KVServer) Scan(start, end []byte, pred predicate.Predicate) []proto.ScanEntry {
+	out := make([]proto.ScanEntry, 0)
+	k.storage.Scan(start, end, func(key, value []byte) bool {
+		if !pred.Eval(value) {
+			return true
+		}
+		out = append(out, proto.ScanEntry{
+			Key:   append([]byte(nil), key...),
+			Value: append([]byte(nil), value...),
+		})
+		if len(out) >= maxScanResults {
+			slog.Warn("[WARN] scan: 结果达到上限，已截断", "cap", maxScanResults)
+			return false
+		}
+		return true
+	})
+	return out
 }
 
 /* Put 直接写入存储（仅用于测试，生产环境应通过 Raft 写入）

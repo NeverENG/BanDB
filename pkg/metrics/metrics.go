@@ -20,6 +20,7 @@ var (
 	FramesDroppedNonMonotonic atomic.Int64 // 被钩子按「时间戳回退/重放」丢弃
 	Writes                    atomic.Int64 // 成功写入（PUT）次数
 	Reads                     atomic.Int64 // 读取（GET）次数
+	Scans                     atomic.Int64 // 边缘范围查询（SCAN）次数
 	Deletes                   atomic.Int64 // 成功删除（DEL）次数
 	WriteErrors               atomic.Int64 // 写入/删除失败次数
 	BackpressureStalls        atomic.Int64 // 写入被字节信用背压阻塞的次数
@@ -54,6 +55,7 @@ type Snapshot struct {
 	DroppedNonMonotonic   int64
 	Writes                int64
 	Reads                 int64
+	Scans                 int64
 	Deletes               int64
 	WriteErrors           int64
 	BackpressureStalls    int64
@@ -69,6 +71,7 @@ func Take() Snapshot {
 		DroppedNonMonotonic:   FramesDroppedNonMonotonic.Load(),
 		Writes:                Writes.Load(),
 		Reads:                 Reads.Load(),
+		Scans:                 Scans.Load(),
 		Deletes:               Deletes.Load(),
 		WriteErrors:           WriteErrors.Load(),
 		BackpressureStalls:    BackpressureStalls.Load(),
@@ -86,6 +89,7 @@ func LogSnapshot() {
 		"dropped_non_monotonic", s.DroppedNonMonotonic,
 		"writes", s.Writes,
 		"reads", s.Reads,
+		"scans", s.Scans,
 		"deletes", s.Deletes,
 		"write_errors", s.WriteErrors,
 		"backpressure_stalls", s.BackpressureStalls,

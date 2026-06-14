@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/NeverENG/BanDB/pkg/predicate"
+	"github.com/NeverENG/BanDB/pkg/proto"
 )
 
 // InteractiveClient 交互式客户端
@@ -25,7 +28,7 @@ func NewInteractiveClient(addr string) (*InteractiveClient, error) {
 
 	fmt.Printf("已连接到 %s\n", addr)
 	fmt.Println("输入命令进行操作，输入 'quit' 或 'exit' 退出")
-	fmt.Println("支持命令: put <key> <value>, get <key>, delete <key>")
+	fmt.Println("支持命令: put <key> <value>, get <key>, delete <key>, scan <start|-> <end|-> [field op operand]")
 	fmt.Println()
 
 	return &InteractiveClient{
@@ -88,6 +91,8 @@ func (ic *InteractiveClient) executeCommand(line string) {
 		ic.handleGet(parts)
 	case "delete":
 		ic.handleDelete(parts)
+	case "scan":
+		ic.handleScan(parts)
 	case "help":
 		ic.showHelp()
 	default:
@@ -151,6 +156,71 @@ func (ic *InteractiveClient) handleDelete(parts []string) {
 	fmt.Println("✅ OK")
 }
 
+// handleScan 处理 SCAN 命令: scan <start|-> <end|-> [field op operand]
+func (ic *InteractiveClient) handleScan(parts []string) {
+	if len(parts) < 3 {
+		fmt.Println("用法: scan <start|-> <end|-> [field op operand]")
+		fmt.Println("示例: scan imu:dev0:100 imu:dev0:200 az > 9.9")
+		return
+	}
+
+	req := proto.ScanRequest{
+		Start: dashToEmpty(parts[1]),
+		End:   dashToEmpty(parts[2]),
+		Pred:  predicate.Predicate{Op: predicate.OpNone},
+	}
+
+	if len(parts) >= 6 {
+		op, ok := parseOp(parts[4])
+		if !ok {
+			fmt.Printf("不支持的算子: %s (支持 > >= < <= == !=)\n", parts[4])
+			return
+		}
+		req.Pred = predicate.Predicate{Field: parts[3], Op: op, Operand: strings.Join(parts[5:], " ")}
+	} else if len(parts) > 3 {
+		fmt.Println("谓词需 3 段: field op operand，例: az > 9.9")
+		return
+	}
+
+	entries, err := ic.client.SendScan(req)
+	if err != nil {
+		fmt.Printf("❌ 错误: %v\n", err)
+		return
+	}
+
+	fmt.Printf("命中 %d 条:\n", len(entries))
+	for _, e := range entries {
+		fmt.Printf("  %s = %s\n", string(e.Key), string(e.Value))
+	}
+}
+
+// dashToEmpty 把 "-" 视为不限边界（空），否则返回原值字节。
+func dashToEmpty(s string) []byte {
+	if s == "-" {
+		return nil
+	}
+	return []byte(s)
+}
+
+// parseOp 把算子符号映射为 predicate.Op。
+func parseOp(s string) (predicate.Op, bool) {
+	switch s {
+	case ">":
+		return predicate.OpGT, true
+	case ">=":
+		return predicate.OpGTE, true
+	case "<":
+		return predicate.OpLT, true
+	case "<=":
+		return predicate.OpLTE, true
+	case "==":
+		return predicate.OpEQ, true
+	case "!=":
+		return predicate.OpNE, true
+	}
+	return predicate.OpNone, false
+}
+
 // showHelp 显示帮助信息
 func (ic *InteractiveClient) showHelp() {
 	fmt.Println("\n=== BanKV 客户端帮助 ===")
@@ -158,6 +228,7 @@ func (ic *InteractiveClient) showHelp() {
 	fmt.Println("  put <key> <value>  - 存储键值对")
 	fmt.Println("  get <key>          - 获取值")
 	fmt.Println("  delete <key>       - 删除键")
+	fmt.Println("  scan <start|-> <end|-> [field op operand] - 范围查询(只回传命中切片)")
 	fmt.Println("  help               - 显示此帮助信息")
 	fmt.Println("  quit/exit          - 退出客户端")
 	fmt.Println()
